@@ -37,3 +37,16 @@ test('listChannels resolves first organization when none configured', async () =
   assert.equal(r.organizationId, 'org_1'); assert.equal(r.channels[0].id, 'ch_1');
   assert.match(f.calls[1].body.query, /organizationId: "org_1"/);
 });
+test('checkBufferSetup lists channels and validates BUFFER_CHANNEL_ID', async () => {
+  const {checkBufferSetup} = await import('./buffer.js');
+  const resp = () => [{data: {account: {organizations: [{id: 'org_1'}]}}}, {data: {channels: [{id: 'ch_x', service: 'twitter', name: 'vxid'}]}}];
+  delete process.env.BUFFER_CHANNEL_ID;
+  let r = await checkBufferSetup(fake(resp()));
+  assert.match(r.message, /set BUFFER_CHANNEL_ID/); assert.equal(r.fields.channels[0].id, 'ch_x');
+  process.env.BUFFER_CHANNEL_ID = 'nope';
+  r = await checkBufferSetup(fake(resp()));
+  assert.equal(r.level, 'warn');
+  process.env.BUFFER_CHANNEL_ID = 'ch_x';
+  r = await checkBufferSetup(fake(resp()));
+  assert.equal(r.message, 'buffer channel ok');
+});
