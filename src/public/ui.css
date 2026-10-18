@@ -52,6 +52,7 @@ button.bad { color: var(--bad); }
 .stats { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .chip { font-family: var(--mono); font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; color: var(--dim); }
 .chip b { color: var(--text); font-weight: 600; margin-left: 6px; }
+.chip.full { border-color: var(--warn); color: var(--warn); }
 
 .gen { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .gen label { flex: 1 1 120px; }
