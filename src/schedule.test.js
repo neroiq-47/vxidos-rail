@@ -13,12 +13,16 @@ test('picks approved drafts from chosen pillars, oldest first, alternating pilla
   assert.deepEqual(pickForSchedule(drafts, ['phantom identity'], 10), []);
 });
 
-test('parseBatch validates input and defaults to 10 posts, all pillars, every 3 hours', () => {
-  const b = parseBatch({startAt: '2030-01-01T00:00:00Z'});
-  assert.equal(b.count, 10); assert.equal(b.pillars.length, 5); assert.equal(b.intervalMs, 3 * 3600_000);
-  assert.throws(() => parseBatch({count: 11}), /count must be 1-10/);
+test('parseBatch: explicit times (up to 100, ordered, 5+ min apart) or start + interval', () => {
+  const t0 = Date.now() + 3600_000, iso = i => new Date(t0 + i * 600_000).toISOString();
+  const b = parseBatch({times: [iso(0), iso(1)]});
+  assert.equal(b.times.length, 2); assert.equal(b.pillars.length, 5);
+  assert.equal(parseBatch({startAt: new Date(t0).toISOString()}).times.length, 10, 'interval mode defaults to 10');
+  assert.equal(parseBatch({count: 100, startAt: new Date(t0).toISOString(), intervalMinutes: 60}).times.length, 100);
+  assert.throws(() => parseBatch({count: 101}), /count must be 1-100/);
+  assert.throws(() => parseBatch({times: Array.from({length: 101}, (_, i) => iso(i))}), /1-100/);
+  assert.throws(() => parseBatch({times: [iso(1), iso(0)]}), /in order/);
+  assert.throws(() => parseBatch({times: [iso(0), new Date(t0 + 60_000).toISOString()]}), /5 minutes/);
   assert.throws(() => parseBatch({pillars: []}), /pillars/);
-  assert.throws(() => parseBatch({pillars: ['crypto pumps']}), /pillars/);
   assert.throws(() => parseBatch({intervalMinutes: 5}), /intervalMinutes/);
-  assert.throws(() => parseBatch({startAt: 'soon'}), /ISO/);
 });

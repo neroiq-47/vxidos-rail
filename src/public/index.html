@@ -65,19 +65,31 @@
         <label>posts
           <select id="auto-count"></select>
         </label>
-        <label>start
-          <input type="datetime-local" id="auto-start">
+        <label>per day
+          <select id="auto-perday"></select>
         </label>
-        <label>every
-          <select id="auto-every">
-            <option value="60">1 h</option><option value="120">2 h</option><option value="180" selected>3 h</option>
-            <option value="240">4 h</option><option value="360">6 h</option><option value="720">12 h</option><option value="1440">24 h</option>
-          </select>
+        <label>from
+          <input type="time" id="auto-from" value="09:00">
         </label>
+        <label>to
+          <input type="time" id="auto-to" value="23:00">
+        </label>
+        <label>starting
+          <input type="date" id="auto-start">
+        </label>
+        <label class="check"><input type="checkbox" id="auto-jitter" checked> ±10 min variation</label>
       </div>
+      <p class="hint" id="auto-plan" aria-live="polite"></p>
       <div class="actions">
-        <button type="button" class="primary" id="auto-btn">auto-schedule 10</button>
-        <span class="hint" id="auto-hint">uses approved drafts, oldest first, alternating pillars. scheduled posts publish automatically.</span>
+        <button type="button" id="auto-preview">preview</button>
+        <button type="button" class="primary" id="auto-btn">schedule 100</button>
+        <span class="hint" id="auto-hint">approved drafts only, oldest first, alternating pillars. scheduled posts publish automatically.</span>
+      </div>
+      <div class="job" id="auto-job" hidden>
+        <progress id="auto-progress" max="100" value="0"></progress>
+        <span class="mono" id="auto-status"></span>
+        <button type="button" class="ghost" id="auto-cancel">cancel</button>
+        <button type="button" class="bad" id="auto-undo" hidden>unschedule this batch</button>
       </div>
     </section>
 

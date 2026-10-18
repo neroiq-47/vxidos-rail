@@ -32,7 +32,7 @@ function windowUsage(times, cap, windowMs, at = Date.now()) {
 // (a Buffer draft has no publish time yet, so count it conservatively when it was sent).
 const publishTime = d => d.status === 'queued' ? Date.parse(d.dueAt || d.queuedAt)
   : d.status === 'queuing' ? Date.parse(d.plannedAt || d.queuingAt) : NaN;
-const publishTimes = drafts => drafts.map(publishTime).filter(t => !Number.isNaN(t));
+export const publishTimes = drafts => drafts.map(publishTime).filter(t => !Number.isNaN(t));
 // For the chip: posts in the 7 days up to now, plus how many are scheduled after now.
 const weeklyUsage = drafts => {
   const at = Date.now(), times = publishTimes(drafts);
@@ -192,6 +192,20 @@ export async function failQueue(id, message) {
   });
 }
 
+// Undo a send: only for posts that haven't published yet (or Buffer drafts). Back to approved so it can be re-sent.
+export async function unqueue(id, reviewer) {
+  if (!isReviewer(reviewer)) throw badRequest('Invalid reviewer');
+  return transaction(db => {
+    const d = find(db, id);
+    if (d.status !== 'queued') throw conflict('Only sent drafts can be unscheduled');
+    if (d.sendMode !== 'draft' && Date.parse(d.dueAt) <= Date.now()) throw conflict('Post already published');
+    const was = {bufferPostId: d.bufferPostId, dueAt: d.dueAt, sendMode: d.sendMode};
+    for (const k of ['bufferPostId', 'dueAt', 'sendMode', 'queuedAt', 'queuedBy']) delete d[k];
+    Object.assign(d, {status: 'approved', updatedAt: now()});
+    event(db, 'draft_unscheduled', id, {reviewer, ...was});
+    return d;
+  });
+}
 export async function listDrafts({status} = {}) {
   if (status && !STATUSES.includes(status)) throw badRequest('Invalid status');
   const {drafts} = await readDb(dataPath());
