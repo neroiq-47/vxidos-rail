@@ -44,3 +44,14 @@ export async function createBufferDraft(text, {channelId = process.env.BUFFER_CH
   if (!r?.post?.id) throw new Error(`Buffer rejected draft: ${r?.message || 'unknown error'}`);
   return r.post;
 }
+
+// Read-only startup check: reports available channels and whether BUFFER_CHANNEL_ID matches one of them.
+export async function checkBufferSetup(fetchImpl) {
+  const {organizationId, channels} = await listChannels(undefined, fetchImpl);
+  const list = channels.map(c => ({id: c.id, service: c.service, name: c.displayName || c.name, paused: !!c.isQueuePaused}));
+  const configured = process.env.BUFFER_CHANNEL_ID;
+  const fields = {organizationId, channels: list, writesEnabled: writesEnabled()};
+  if (!configured) return {level: 'info', message: 'buffer connected; set BUFFER_CHANNEL_ID to one of these channels', fields};
+  if (!list.some(c => c.id === configured)) return {level: 'warn', message: 'BUFFER_CHANNEL_ID not found in this Buffer organization', fields: {...fields, configured}};
+  return {level: 'info', message: 'buffer channel ok', fields: {...fields, configured}};
+}

@@ -5,6 +5,7 @@ import {createApp} from './app.js';
 import {draftOnce} from './rail.js';
 import {stats} from './store.js';
 import {logger} from './log.js';
+import {checkBufferSetup} from './buffer.js';
 
 const host = process.env.HOST || '127.0.0.1'; // Dockerfile sets 0.0.0.0 for containers
 const port = Number(process.env.PORT || 3000);
@@ -23,6 +24,9 @@ try { server = createApp({secret: process.env.RAIL_SECRET}); }
 catch (e) { logger.error('startup failed', {error: e.message}); process.exit(1); }
 server.listen(port, host, () => logger.info('VXIDOS rail listening', {host, port, dataDir, generation: Boolean(process.env.OPENAI_API_KEY)}));
 if (!process.env.OPENAI_API_KEY) logger.warn('OPENAI_API_KEY missing: dashboard works, generation will return 503');
+
+// Buffer setup check: lists channels in the logs so BUFFER_CHANNEL_ID can be picked without calling the API by hand.
+if (process.env.BUFFER_API_KEY) checkBufferSetup().then(r => logger[r.level](r.message, r.fields)).catch(e => logger.warn('buffer check failed', {error: e.message}));
 
 // Optional autopilot: drafts are still created as pending_approval and wait for a human.
 const every = Number(process.env.DRAFT_INTERVAL_MINUTES || 0);
