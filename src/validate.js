@@ -15,6 +15,8 @@ export function validateDraft(text) {
   if (len > MAX_CHARS) throw badRequest(`Draft is ${len}/${MAX_CHARS} characters as X counts them (emoji count as 2)`);
   if (/https?:\/\/|www\.\S+/i.test(t)) throw badRequest('Unapproved links are not permitted');
   if (/(guaranteed (returns|profit|income)|risk.free profit|\$\d{1,3}(,\d{3}){1,}\+? (earned|made|profit)|\$\d{6,} earned|\d+x your money)/i.test(t)) throw badRequest('Unverifiable financial claim');
+  // Crypto hype and drainer bait read as scams even when meant ironically.
+  if (/(to the moon|\b\d{2,}x (gem|coin|token|potential|returns|gains)\b|buy (it |this )?now|presale is live|(connect your wallet|claim (your |the )?airdrop) (here|now|to claim|before)|send .{0,20}\b(eth|btc|sol|usdt)\b.{0,30}\b(get|receive)\b.{0,15}back)/i.test(t)) throw badRequest('Crypto hype or scam-bait language');
   if (/[@#]everyone\b/i.test(t)) throw badRequest('Mass-mention text prohibited');
   if ((t.match(/(^|\s)@\w+/g) || []).length > 2) throw badRequest('Too many mentions');
   if ((t.match(/(^|\s)#\w+/g) || []).length > 2) throw badRequest('Too many hashtags');

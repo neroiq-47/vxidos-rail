@@ -45,7 +45,8 @@ docker run -p 127.0.0.1:3000:3000 --env-file .env -v vxidos-data:/data vxidos-ra
 ## Features
 - **Review dashboard** at `/`, with no build step and a strict CSP. Edit drafts inline, approve or reject them (with an optional note), push approved ones to Buffer, and view the audit trail.
 - **Generation with guardrails**:
-  - Pillar rotation: midnight lifestyle, phantom identity, digital-building progress.
+  - Pillar rotation: midnight lifestyle, phantom identity, digital-building progress, **dark web3** (rug pulls, drainers, exploits and MEV, written as security awareness rather than how-to) and **privacy protocols** (zk proofs, stealth addresses, shielded pools, Monero and Zcash, FHE and MPC). Each web3 pillar sends the model a topic guide with its theme.
+  - Crypto hype and scam bait are rejected: "to the moon", "100x gem", "buy now", "connect your wallet here", airdrop-claim lures, send-X-get-2X. Warnings that mention those things still pass.
   - Recent posts are included in the prompt so it avoids repeats.
   - Output that fails validation (links, unverifiable financial claims, mass mentions, hashtag spam, shorter than 12 characters, or over **280 characters as X counts them**: emoji and CJK count as 2, text is NFC-normalised. The dashboard's live `n/280` counter uses the same code, `src/public/tweetlen.js`) is retried up to 3 times.
   - Near-duplicate blocking: case, punctuation and spacing are normalised before hashing.
