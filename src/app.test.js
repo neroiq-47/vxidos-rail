@@ -12,7 +12,10 @@ let n = 0;
 const bufferCalls = [];
 const fakeBuffer = {
   writesEnabled: () => true,
-  createBufferDraft: async text => { bufferCalls.push(text); if (text.includes('fail')) throw new Error('boom'); return {id: 'buf_' + bufferCalls.length}; },
+  createBufferPost: async (text, opts = {}) => {
+    bufferCalls.push({text, ...opts}); if (text.includes('fail')) throw new Error('boom');
+    return {id: 'buf_' + bufferCalls.length, dueAt: opts.mode === 'schedule' ? opts.dueAt : opts.mode === 'queue' ? '2030-01-01T09:00:00.000Z' : null};
+  },
   verifyBufferConnection: async () => ({organizations: [{id: 'org1'}]}),
   listChannels: async () => ({channels: []})
 };
@@ -79,6 +82,40 @@ test('input validation', async () => {
   assert.equal((await api('GET', '/nope')).status, 404);
   const big = await fetch(base + '/draft', {method: 'POST', headers: {authorization: `Bearer ${secret}`}, body: 'x'.repeat(9000)});
   assert.equal(big.status, 413);
+});
+
+test('send modes: queue and schedule reach Buffer with the right options; bad input is rejected before claiming', async () => {
+  const mk = async t => {
+    const {body: {drafts: [d]}} = await api('POST', '/draft', {});
+    await api('PATCH', `/drafts/${d.id}`, {text: t, editor: 'owner'});
+    await api('POST', `/drafts/${d.id}/review`, {decision: 'approved', reviewer: 'owner'});
+    return d.id;
+  };
+  const q = await mk('queued into the next buffer slot.');
+  const r1 = await api('POST', `/drafts/${q}/queue`, {reviewer: 'owner', mode: 'queue'});
+  assert.equal(r1.status, 200); assert.equal(r1.body.sendMode, 'queue'); assert.equal(r1.body.dueAt, '2030-01-01T09:00:00.000Z');
+  const s = await mk('scheduled for a quiet hour.');
+  assert.equal((await api('POST', `/drafts/${s}/queue`, {reviewer: 'owner', mode: 'schedule'})).status, 400, 'schedule needs dueAt');
+  assert.equal((await api('POST', `/drafts/${s}/queue`, {reviewer: 'owner', mode: 'schedule', dueAt: '2001-01-01T00:00:00Z'})).status, 400, 'past');
+  assert.equal((await api('POST', `/drafts/${s}/queue`, {reviewer: 'owner', mode: 'now'})).status, 400, 'unknown mode');
+  assert.equal((await api('GET', `/drafts/${s}`)).body.status, 'approved', 'rejected input did not claim the draft');
+  const due = new Date(Date.now() + 3 * 3600_000).toISOString();
+  const r2 = await api('POST', `/drafts/${s}/queue`, {reviewer: 'owner', mode: 'schedule', dueAt: due});
+  assert.equal(r2.status, 200); assert.equal(r2.body.sendMode, 'schedule'); assert.equal(r2.body.dueAt, due);
+  assert.deepEqual(bufferCalls.at(-1), {text: 'scheduled for a quiet hour.', mode: 'schedule', dueAt: due});
+});
+
+test('daily draft creation cap: generation stops at the cap and says when a slot frees', async () => {
+  const before = (await api('GET', '/stats')).body.daily;
+  assert.equal(before.cap, 50);
+  process.env.DAILY_DRAFT_CAP = String(before.used + 1);
+  try {
+    const r = await api('POST', '/draft', {count: 3});
+    assert.equal(r.status, 201); assert.equal(r.body.drafts.length, 1);
+    assert.match(r.body.errors.join(' '), /only 1 of 3/);
+    const blocked = await api('POST', '/draft', {});
+    assert.equal(blocked.status, 429); assert.match(blocked.body.error, /Daily draft creation cap reached .*next slot frees at/);
+  } finally { delete process.env.DAILY_DRAFT_CAP; }
 });
 
 test('auth: wrong token is 401, then locked out even with right token', async () => {

@@ -67,12 +67,14 @@ async function refresh() {
 }
 
 async function loadStats() {
-  const { counts = {}, total = 0, weekly } = await api('/stats');
+  const { counts = {}, total = 0, weekly, daily } = await api('/stats');
   $('stats').replaceChildren(
     ...Object.entries(STATUS_LABEL).map(([k, label]) => el('span', { class: 'chip', text: label }, el('b', { text: String(counts[k] ?? 0) }))),
     el('span', { class: 'chip', text: 'total' }, el('b', { text: String(total) })),
     weekly && el('span', { class: 'chip' + (weekly.remaining ? '' : ' full'), text: 'this week', title: weekly.nextSlotAt ? `next slot ${new Date(weekly.nextSlotAt).toLocaleString()}` : 'rolling 7 days' },
-      el('b', { text: `${weekly.used}/${weekly.cap}` }))
+      el('b', { text: `${weekly.used}/${weekly.cap}` })),
+    daily && el('span', { class: 'chip' + (daily.remaining ? '' : ' full'), text: 'drafts today', title: daily.nextSlotAt ? `next slot ${new Date(daily.nextSlotAt).toLocaleString()}` : 'rolling 24 hours' },
+      el('b', { text: `${daily.used}/${daily.cap}` }))
   );
 }
 
@@ -96,7 +98,7 @@ async function loadEvents() {
 async function act(btn, fn, okMsg) {
   const card = btn.closest('.card');
   card?.querySelectorAll('button').forEach(b => { b.disabled = true; });
-  try { await fn(); if (okMsg) toast(okMsg); await refresh(); }
+  try { await fn(); const msg = typeof okMsg === 'function' ? okMsg() : okMsg; if (msg) toast(msg); await refresh(); }
   catch (e) { toast(e.message, true); card?.querySelectorAll('button').forEach(b => { b.disabled = false; }); }
 }
 
@@ -112,7 +114,9 @@ function card(d) {
     el('span', { text: ago(d.createdAt), title: d.createdAt }),
     countEl(d.text),
     d.reviewedBy ? el('span', { text: `by ${d.reviewedBy}` }) : null,
-    d.bufferPostId ? el('span', { class: 'mono', text: `buffer ${d.bufferPostId}` }) : null);
+    d.bufferPostId ? el('span', { class: 'mono', text: d.sendMode === 'schedule' || d.sendMode === 'queue'
+      ? `${d.sendMode === 'queue' ? 'queued' : 'scheduled'} ${d.dueAt ? new Date(d.dueAt).toLocaleString() : ''}`.trim()
+      : 'buffer draft', title: `buffer post ${d.bufferPostId}` }) : null);
   const c = el('article', { class: 'card', 'data-id': d.id }, el('p', { class: 'text', text: d.text }), meta);
   if (d.note) c.append(el('p', { class: 'note dim', text: `note: ${d.note}` }));
   if (d.queueError) c.append(el('p', { class: 'err', text: `buffer error: ${d.queueError}` }));
@@ -126,9 +130,27 @@ function card(d) {
       el('button', { type: 'button', onclick: () => editMode(c, d) }, 'edit'),
       el('button', { type: 'button', class: 'bad', onclick: () => rejectMode(c, d) }, 'reject'));
   } else if (d.status === 'approved') {
-    const b = el('button', { type: 'button', class: 'primary', disabled: !state.bufferWrites, onclick: e => act(e.currentTarget, () =>
-      api(`/drafts/${id}/queue`, { method: 'POST', body: { reviewer: state.reviewer } }), 'sent to buffer as draft') }, 'send to buffer');
-    actions.append(b);
+    // datetime-local is in the viewer's local time; the server and Buffer get UTC ISO.
+    const pad = n => String(n).padStart(2, '0');
+    const local = t => `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}`;
+    const mode = el('select', { 'aria-label': 'how to send to buffer' },
+      el('option', { value: 'draft', text: 'as buffer draft' }),
+      el('option', { value: 'queue', text: 'next buffer slot' }),
+      el('option', { value: 'schedule', text: 'schedule at…' }));
+    const when = el('input', { type: 'datetime-local', 'aria-label': 'publish time (your local time)', hidden: true,
+      min: local(new Date(Date.now() + 2 * 60_000)), value: local(new Date(Date.now() + 3600_000)) });
+    mode.addEventListener('change', () => { when.hidden = mode.value !== 'schedule'; });
+    const done = { draft: 'sent to buffer as draft', queue: 'added to buffer queue', schedule: 'scheduled in buffer' };
+    const b = el('button', { type: 'button', class: 'primary', disabled: !state.bufferWrites, onclick: e => act(e.currentTarget, () => {
+      const body = { reviewer: state.reviewer, mode: mode.value };
+      if (mode.value === 'schedule') {
+        const t = new Date(when.value);
+        if (!when.value || Number.isNaN(t.getTime())) throw new Error('pick a publish time');
+        body.dueAt = t.toISOString();
+      }
+      return api(`/drafts/${id}/queue`, { method: 'POST', body });
+    }, () => done[mode.value]) }, 'send');
+    actions.append(mode, when, b);
     if (!state.bufferWrites) {
       b.setAttribute('aria-describedby', `hint-${d.id}`);
       actions.append(el('span', { class: 'hint', id: `hint-${d.id}`, text: 'buffer writes disabled on server' }));
