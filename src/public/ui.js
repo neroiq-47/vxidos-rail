@@ -115,6 +115,7 @@ function card(d) {
     d.pillar ? el('span', { class: 'tag', text: d.pillar }) : null,
     el('span', { text: ago(d.createdAt), title: d.createdAt }),
     countEl(d.text),
+    d.provider ? el('span', { class: 'mono dim', text: `via ${d.provider}`, title: d.model || '' }) : null,
     d.reviewedBy ? el('span', { text: `by ${d.reviewedBy}` }) : null,
     d.bufferPostId ? el('span', { class: 'mono', text: d.sendMode === 'schedule' || d.sendMode === 'queue'
       ? `${d.sendMode === 'queue' ? 'queued' : 'scheduled'} ${d.dueAt ? new Date(d.dueAt).toLocaleString() : ''}`.trim()

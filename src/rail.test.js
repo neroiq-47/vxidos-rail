@@ -39,3 +39,7 @@ test('batch collects content errors without failing', async () => {
   const r = await draftBatch(2, {generate: async () => 'the work is the alibi.'});
   assert.equal(r.drafts.length, 0); assert.equal(r.errors.length, 2);
 });
+test('records which provider wrote the draft', async () => {
+  const d = await draftOnce({generate: async () => ({text: 'the fallback still has taste.', provider: 'groq', model: 'llama'})});
+  assert.equal(d.provider, 'groq'); assert.equal(d.model, 'llama');
+});

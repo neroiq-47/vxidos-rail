@@ -8,6 +8,7 @@ import {SEND_MODES, checkDueAt} from './buffer.js';
 import * as store from './store.js';
 import {isId} from './validate.js';
 import {logger} from './log.js';
+import {providersFromEnv} from './llm.js';
 
 export const VERSION = '1.0.0';
 const PUBLIC = new URL('./public/', import.meta.url);
@@ -48,6 +49,7 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
   const drafting = rateLimiter(Number(env.DRAFT_LIMIT_PER_HOUR || 30), 3600_000);
   const generating = {busy: false};
   const trust = parseTrustProxy(env.TRUST_PROXY);
+  const providers = providersFromEnv(env);
 
   const routes = [
     ['GET', /^\/stats$/, async () => [200, await store.stats()]],
@@ -108,7 +110,7 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
         const [file, type] = STATIC[url.pathname];
         return send(200, await readFile(new URL(file, PUBLIC)), {'Content-Type': type});
       }
-      if (req.method === 'GET' && url.pathname === '/health') return send(200, {ok: true, brand: 'VXIDOS', version: VERSION, generation: Boolean(env.OPENAI_API_KEY), bufferWrites: bufferApi.writesEnabled()});
+      if (req.method === 'GET' && url.pathname === '/health') return send(200, {ok: true, brand: 'VXIDOS', version: VERSION, generation: providers.length > 0, providers: providers.map(p => p.name), bufferWrites: bufferApi.writesEnabled()});
       // Once an IP exhausts its failed attempts it is locked out even with the right token, so guessing can't continue.
       if (authFail.blocked(ip)) return send(429, {error: 'Too many failed attempts'});
       if (!tokenEqual(req.headers.authorization, `Bearer ${secret}`)) { authFail(ip); return send(401, {error: 'Unauthorized'}, {'WWW-Authenticate': 'Bearer'}); }

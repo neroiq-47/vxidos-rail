@@ -61,6 +61,7 @@ docker run -p 127.0.0.1:3000:3000 --env-file .env -v vxidos-data:/data vxidos-ra
   - Per-IP request and generation rate limits.
   - 8 KB body cap and security headers.
   - Binds to localhost by default.
+- **Free backup LLM**: set `FALLBACK_LLM_PROVIDER=groq` (or `cerebras`, `openrouter`, `gemini`) plus `FALLBACK_LLM_API_KEY`. If OpenAI fails (quota, outage, bad key), the draft is written by the backup instead. OpenAI is then skipped for 5 minutes, so an exhausted quota doesn't slow down every draft. The backup also works on its own, with no OpenAI key. Each draft records which provider wrote it, and the dashboard shows it as `via groq`. Free tiers are rate-limited and their models change over time, so `FALLBACK_LLM_MODEL` overrides the default. Check each provider's free-tier terms for how your prompts are used.
 - **Weekly posting cap**: at most `WEEKLY_POST_CAP` posts (default **200**) can be sent to Buffer in any rolling 7 days. It's enforced inside the store transaction, so concurrent sends can't go over. Past the cap, sending returns `429` with the time the next slot frees up. The dashboard shows `this week used/cap`.
 - **Draft creation sized to the posting cap**: the bot never writes more drafts than it can post.
   - Per rolling 7 days, at most `WEEKLY_DRAFT_CAP` drafts. The default equals `WEEKLY_POST_CAP`, so **200**.
@@ -102,7 +103,7 @@ All endpoints except `/`, `/ui.*` and `/health` need `Authorization: Bearer $RAI
 | GET | `/events` | `?limit=50` | audit log, newest first |
 | GET | `/buffer/check`, `/buffer/channels` | | read-only |
 
-`/health` also reports `generation` (whether `OPENAI_API_KEY` is set).
+`/health` also reports `generation` (whether any LLM is configured) and `providers` (in the order they're tried).
 
 Status codes: `400` invalid input, `401`/`429` auth, `404`, `409` wrong state or duplicate, `413` body too large, `502` upstream (OpenAI/Buffer) failure, `503` missing configuration or storage busy.
 
