@@ -7,7 +7,7 @@
     "start": "node src/server.js",
     "draft": "node src/rail.js",
     "test": "node --test",
-    "check": "for f in src/*.js src/public/ui.js; do node --check \"$f\" || exit 1; done"
+    "check": "for f in src/*.js src/public/*.js; do node --check \"$f\" || exit 1; done"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
