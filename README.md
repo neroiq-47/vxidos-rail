@@ -62,7 +62,11 @@ docker run -p 127.0.0.1:3000:3000 --env-file .env -v vxidos-data:/data vxidos-ra
   - 8 KB body cap and security headers.
   - Binds to localhost by default.
 - **Free backup LLM**: set `FALLBACK_LLM_PROVIDER=groq` (or `cerebras`, `openrouter`, `gemini`) plus `FALLBACK_LLM_API_KEY`. If OpenAI fails (quota, outage, bad key), the draft is written by the backup instead. OpenAI is then skipped for 5 minutes, so an exhausted quota doesn't slow down every draft. The backup also works on its own, with no OpenAI key. Each draft records which provider wrote it, and the dashboard shows it as `via groq`. Free tiers are rate-limited and their models change over time, so `FALLBACK_LLM_MODEL` overrides the default. Check each provider's free-tier terms for how your prompts are used.
-- **Weekly posting cap**: at most `WEEKLY_POST_CAP` posts (default **200**) can be sent to Buffer in any rolling 7 days. It's enforced inside the store transaction, so concurrent sends can't go over. Past the cap, sending returns `429` with the time the next slot frees up. The dashboard shows `this week used/cap`.
+- **Weekly posting cap**: at most `WEEKLY_POST_CAP` posts (default **200**) can **publish** in any rolling 7 days.
+  - Each post counts at its publish time: the scheduled time, or the time Buffer gives a queue slot. A Buffer draft counts when it's sent, since it has no publish time yet.
+  - A new send is checked against every 7-day window that would contain it, so scheduling ahead can't stack more than the cap into one week.
+  - The check runs inside the store transaction, so concurrent sends can't go over. Past the cap, sending returns `429` naming the full week.
+  - The dashboard shows `this week used/cap +N`, where N is posts scheduled ahead.
 - **Draft creation sized to the posting cap**: the bot never writes more drafts than it can post.
   - Per rolling 7 days, at most `WEEKLY_DRAFT_CAP` drafts. The default equals `WEEKLY_POST_CAP`, so **200**.
   - Per rolling 24 hours, at most `DAILY_DRAFT_CAP`. The default is the weekly figure ÷ 7, rounded up, so **29**.
@@ -93,7 +97,7 @@ All endpoints except `/`, `/ui.*` and `/health` need `Authorization: Bearer $RAI
 | Method | Path | Body / query | Notes |
 |---|---|---|---|
 | GET | `/health` | | `{ok, version, bufferWrites}` |
-| GET | `/stats` | | counts per status, plus `weekly` (sends) and `daily` / `weeklyDrafts` (drafts created) and `creation` (whichever is tighter), each `{cap, used, remaining, nextSlotAt}` |
+| GET | `/stats` | | counts per status, plus `weekly` (posts by publish time, with `scheduled` ahead) and `daily` / `weeklyDrafts` (drafts created) and `creation` (whichever is tighter), each `{cap, used, remaining, nextSlotAt}` |
 | GET | `/drafts` | `?status=pending_approval\|approved\|rejected\|queuing\|queued` | newest first |
 | GET | `/drafts/:id` | | |
 | POST | `/draft` | `{count?: 1-5, pillar?}` | calls the LLM (costs money); `201 {drafts, errors}` |

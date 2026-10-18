@@ -28,9 +28,31 @@ function windowUsage(times, cap, windowMs, at = Date.now()) {
   const nextSlotAt = used >= cap && used ? new Date(inWindow[used - cap] + windowMs).toISOString() : null;
   return {cap, used, remaining: Math.max(0, cap - used), nextSlotAt};
 }
-// Every post sent to Buffer (or mid-send) counts for 7 days.
-const weeklyUsage = drafts => windowUsage(drafts.flatMap(d =>
-  d.status === 'queued' ? [Date.parse(d.queuedAt)] : d.status === 'queuing' ? [Date.parse(d.queuingAt)] : []), weeklyCap(), WEEK_MS);
+// A post counts at the time it publishes: Buffer's dueAt for queued/scheduled posts, otherwise the send time
+// (a Buffer draft has no publish time yet, so count it conservatively when it was sent).
+const publishTime = d => d.status === 'queued' ? Date.parse(d.dueAt || d.queuedAt)
+  : d.status === 'queuing' ? Date.parse(d.plannedAt || d.queuingAt) : NaN;
+const publishTimes = drafts => drafts.map(publishTime).filter(t => !Number.isNaN(t));
+// For the chip: posts in the 7 days up to now, plus how many are scheduled after now.
+const weeklyUsage = drafts => {
+  const at = Date.now(), times = publishTimes(drafts);
+  return {...windowUsage(times.filter(t => t <= at), weeklyCap(), WEEK_MS, at), scheduled: times.filter(t => t > at).length};
+};
+// Would one more post at `at` push ANY rolling 7-day window [s, s+7d) containing it over the cap?
+// A window's count only rises when a later post enters on the right, so the candidate starts are at-7d and
+// just after t-7d for each post t in (at, at+7d), plus existing posts in (at-7d, at]. Checking them all
+// means scheduling ahead can't stack more than the cap into any week.
+export function weekFits(times, at, cap = weeklyCap()) {
+  const starts = [at - WEEK_MS + 1,
+    ...times.filter(t => t > at && t < at + WEEK_MS).map(t => t - WEEK_MS + 1),
+    ...times.filter(t => t > at - WEEK_MS && t <= at)];
+  let worst = {count: 0, start: starts[0]};
+  for (const s of starts) {
+    const count = times.filter(t => t >= s && t < s + WEEK_MS).length;
+    if (count > worst.count) worst = {count, start: s};
+  }
+  return {ok: worst.count + 1 <= cap, used: worst.count, cap, windowStart: new Date(worst.start).toISOString()};
+}
 // Every draft created counts for 24 hours, whatever happened to it since (so rejecting doesn't refund).
 const createdTimes = drafts => drafts.map(d => Date.parse(d.createdAt));
 const dailyDraftUsage = drafts => windowUsage(createdTimes(drafts), dailyDraftCap(), DAY_MS);
@@ -134,16 +156,17 @@ export async function reviewDraft(id, decision, reviewer, note) {
 }
 
 // Queuing is claim → external call → finish/fail, so two concurrent requests can't both push to Buffer.
-export async function claimForQueue(id, reviewer) {
+// plannedAt: when the post will publish (the schedule time; now for drafts and the Buffer queue).
+export async function claimForQueue(id, reviewer, {plannedAt = Date.now()} = {}) {
   if (!isReviewer(reviewer)) throw badRequest('Invalid reviewer');
   return transaction(db => {
     const d = find(db, id);
     const stale = d.status === 'queuing' && Date.now() - Date.parse(d.queuingAt) > STALE_QUEUING_MS;
     if (d.status !== 'approved' && !stale) throw conflict(d.status === 'queued' ? 'Draft already queued' : 'Only approved drafts can be queued');
     // Checked inside the transaction so concurrent sends can't overshoot the cap.
-    const week = weeklyUsage(db.drafts.filter(x => x.id !== id));
-    if (week.remaining <= 0) throw capError('Weekly posting cap reached', week);
-    Object.assign(d, {status: 'queuing', queuingAt: now(), updatedAt: now()});
+    const fit = weekFits(publishTimes(db.drafts.filter(x => x.id !== id)), plannedAt);
+    if (!fit.ok) throw new HttpError(429, `Weekly posting cap reached (${fit.used}/${fit.cap} posts in the 7 days from ${fit.windowStart})`);
+    Object.assign(d, {status: 'queuing', queuingAt: now(), plannedAt: new Date(plannedAt).toISOString(), updatedAt: now()});
     event(db, 'draft_queuing', id, {reviewer});
     return {...d};
   });
@@ -154,7 +177,7 @@ export async function finishQueue(id, bufferPostId, reviewer, {sendMode = 'draft
     const d = find(db, id);
     const at = now();
     Object.assign(d, {status: 'queued', bufferPostId, queuedAt: at, queuedBy: reviewer, updatedAt: at, sendMode, dueAt});
-    delete d.queueError; delete d.queuingAt;
+    delete d.queueError; delete d.queuingAt; delete d.plannedAt;
     event(db, 'draft_queued', id, {reviewer, bufferPostId, sendMode, ...(dueAt ? {dueAt} : {})});
     return d;
   });
@@ -163,7 +186,7 @@ export async function failQueue(id, message) {
   return transaction(db => {
     const d = find(db, id);
     Object.assign(d, {status: 'approved', queueError: String(message).slice(0, 500), updatedAt: now()});
-    delete d.queuingAt;
+    delete d.queuingAt; delete d.plannedAt;
     event(db, 'draft_queue_failed', id, {error: d.queueError});
     return d;
   });

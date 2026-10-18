@@ -38,9 +38,9 @@ test('weekly posting cap blocks sends past the limit and reports the next slot',
   // One send from 8 days ago is outside the rolling window and must not count.
   await transaction(db=>{db.drafts.push({id:'old',text:'x',hash:'old',status:'queued',queuedAt:new Date(Date.now()-8*86400_000).toISOString(),createdAt:'2000-01-01'});});
   for(const id of ids.slice(0,2)){await claimForQueue(id,'owner');await finishQueue(id,'buf_'+id,'owner');}
-  await assert.rejects(claimForQueue(ids[2],'owner'),e=>e.status===429&&/2\/2/.test(e.message)&&/next slot/.test(e.message));
+  await assert.rejects(claimForQueue(ids[2],'owner'),e=>e.status===429&&/2\/2 posts in the 7 days/.test(e.message));
   const w=(await stats()).weekly;
-  assert.equal(w.used,2);assert.equal(w.remaining,0);assert.ok(Date.parse(w.nextSlotAt)>Date.now()+6*86400_000);
+  assert.equal(w.used,2);assert.equal(w.remaining,0);assert.ok(Date.parse(w.nextSlotAt)>Date.now()+6*86400_000);assert.equal(w.scheduled,0);
   process.env.WEEKLY_POST_CAP='3';
   assert.equal((await claimForQueue(ids[2],'owner')).status,'queuing','raising the cap frees a slot');
  } finally { delete process.env.WEEKLY_POST_CAP; delete process.env.DAILY_DRAFT_CAP; delete process.env.WEEKLY_DRAFT_CAP; }
@@ -72,4 +72,21 @@ test('creation caps follow the weekly post cap: daily = ceil(weekly/7), weekly d
   const wk=creationBudget(week);
   assert.equal(wk.remaining,0); assert.equal(wk.window,'weekly');
  } finally { delete process.env.WEEKLY_POST_CAP; delete process.env.DAILY_DRAFT_CAP; }
+});
+test('weekly cap counts publish time: scheduling ahead cannot stack more than the cap into one week', async()=>{
+ const {weekFits}=await import('./store.js');
+ const day=86400_000, t0=Date.now();
+ const times=[t0+8*day, t0+9*day, t0+10*day]; // 3 posts already scheduled for days 8-10
+ assert.equal(weekFits(times, t0, 3).ok, true, 'today: no week contains both today and day 8+');
+ assert.equal(weekFits(times, t0+12*day, 3).ok, false, 'day 12 shares a week with days 8-10');
+ assert.equal(weekFits(times, t0+5*day, 3).ok, false, 'day 5 shares a week [4.x, 11.x) with days 8-10 (future window)');
+ assert.equal(weekFits(times, t0+2*day, 3).ok, true, 'day 2 can only share a week with day 8');
+ assert.equal(weekFits(times, t0+2*day, 1).ok, false, '...which matters when the cap is 1');
+ assert.equal(weekFits(times, t0+17.5*day, 3).ok, true, 'more than 7 days after day 10');
+ // brute force agrees on random schedules
+ for (let k=0;k<200;k++){
+  const ts=Array.from({length:6},()=>t0+Math.random()*20*day), at=t0+Math.random()*20*day, cap=1+Math.floor(Math.random()*4);
+  let worst=0; for(let s=at-7*day;s<=at;s+=day/96){const c=ts.filter(t=>t>=s&&t<s+7*day).length; if(c>worst) worst=c;}
+  assert.equal(weekFits(ts, at, cap).ok, worst+1<=cap);
+ }
 });
