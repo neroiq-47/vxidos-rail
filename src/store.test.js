@@ -31,7 +31,7 @@ test('stale lock from a crashed process is recovered', async()=>{
 });
 test('weekly posting cap blocks sends past the limit and reports the next slot', async()=>{
  const {claimForQueue,finishQueue,stats,transaction}=await import('./store.js');
- process.env.WEEKLY_POST_CAP='2';
+ process.env.WEEKLY_POST_CAP='2'; process.env.DAILY_DRAFT_CAP='100'; process.env.WEEKLY_DRAFT_CAP='100'; // isolate the send cap
  try {
   const ids=[];
   for(const t of ['cap test one goes out.','cap test two goes out.','cap test three waits.']){const d=await saveDraft(t);await reviewDraft(d.id,'approved','owner');ids.push(d.id);}
@@ -43,9 +43,33 @@ test('weekly posting cap blocks sends past the limit and reports the next slot',
   assert.equal(w.used,2);assert.equal(w.remaining,0);assert.ok(Date.parse(w.nextSlotAt)>Date.now()+6*86400_000);
   process.env.WEEKLY_POST_CAP='3';
   assert.equal((await claimForQueue(ids[2],'owner')).status,'queuing','raising the cap frees a slot');
- } finally { delete process.env.WEEKLY_POST_CAP; }
+ } finally { delete process.env.WEEKLY_POST_CAP; delete process.env.DAILY_DRAFT_CAP; delete process.env.WEEKLY_DRAFT_CAP; }
 });
 test('weekly cap defaults to 200', async()=>{
  const {weeklyCap}=await import('./store.js');
  assert.equal(weeklyCap(),200);
+});
+test('creation caps follow the weekly post cap: daily = ceil(weekly/7), weekly drafts = weekly posts', async()=>{
+ const {dailyDraftCap,weeklyDraftCap,creationBudget}=await import('./store.js');
+ assert.equal(weeklyDraftCap(),200); assert.equal(dailyDraftCap(),29);
+ process.env.WEEKLY_POST_CAP='70';
+ try {
+  assert.equal(weeklyDraftCap(),70); assert.equal(dailyDraftCap(),10);
+  process.env.DAILY_DRAFT_CAP='auto'; assert.equal(dailyDraftCap(),10,'auto keeps the derived value');
+  process.env.DAILY_DRAFT_CAP='5'; assert.equal(dailyDraftCap(),5,'explicit number overrides');
+  delete process.env.DAILY_DRAFT_CAP;
+  // 6 days of 10/day = 60 this week: daily has room (10) but the weekly budget (70) leaves exactly 10, then 9 after one more.
+  const day=86400_000, drafts=[];
+  for(let d=1;d<=6;d++) for(let i=0;i<10;i++) drafts.push({createdAt:new Date(Date.now()-d*day-1000).toISOString()});
+  drafts.push({createdAt:new Date().toISOString()});
+  const b=creationBudget(drafts);
+  assert.equal(b.remaining,9); assert.ok(['daily','weekly'].includes(b.window));
+  for(let i=0;i<9;i++) drafts.push({createdAt:new Date().toISOString()});
+  const full=creationBudget(drafts);
+  assert.equal(full.remaining,0); assert.equal(full.window,'daily');
+  // a full week at the weekly limit blocks even when today is empty
+  const week=Array.from({length:70},(_, i)=>({createdAt:new Date(Date.now()-day-1000-i*60_000).toISOString()}));
+  const wk=creationBudget(week);
+  assert.equal(wk.remaining,0); assert.equal(wk.window,'weekly');
+ } finally { delete process.env.WEEKLY_POST_CAP; delete process.env.DAILY_DRAFT_CAP; }
 });

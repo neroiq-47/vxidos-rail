@@ -107,12 +107,12 @@ test('send modes: queue and schedule reach Buffer with the right options; bad in
 
 test('daily draft creation cap: generation stops at the cap and says when a slot frees', async () => {
   const before = (await api('GET', '/stats')).body.daily;
-  assert.equal(before.cap, 50);
+  assert.equal(before.cap, 29, 'default daily cap is ceil(200 weekly posts / 7)');
   process.env.DAILY_DRAFT_CAP = String(before.used + 1);
   try {
     const r = await api('POST', '/draft', {count: 3});
     assert.equal(r.status, 201); assert.equal(r.body.drafts.length, 1);
-    assert.match(r.body.errors.join(' '), /only 1 of 3/);
+    assert.match(r.body.errors.join(' '), /only 1 of 3 generated: daily draft cap/);
     const blocked = await api('POST', '/draft', {});
     assert.equal(blocked.status, 429); assert.match(blocked.body.error, /Daily draft creation cap reached .*next slot frees at/);
   } finally { delete process.env.DAILY_DRAFT_CAP; }
