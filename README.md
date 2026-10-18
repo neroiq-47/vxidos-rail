@@ -18,6 +18,9 @@ npm start                 # open http://127.0.0.1:3000 and sign in with RAIL_SEC
 npm run draft -- 3        # or generate 3 drafts from the CLI
 ```
 
+### Railway
+Set `RAIL_SECRET`, `OPENAI_API_KEY` and `TRUST_PROXY=1` as service variables. Attach a volume at `/data` so drafts survive redeploys, then generate a domain. Without `TRUST_PROXY=1`, every visitor shares the proxy's IP, so a few bad logins would lock everyone out.
+
 ### Docker
 ```bash
 docker build -t vxidos-rail .
@@ -74,6 +77,6 @@ Status codes: `400` invalid input, `401`/`429` auth, `404`, `409` wrong state or
 ## Operational limits
 - The JSON store is built for **one process on a persistent disk**. Running several instances needs Postgres or Supabase with unique constraints on `hash` and transactional status updates. The `store.js` API is small enough to swap out.
 - Auth is a single shared token. Anyone holding it can review, and the `reviewer` name is self-declared. For teams, put an SSO proxy in front (e.g. Cloudflare Access) and derive the reviewer from it.
-- Rate limits are in memory and reset when the process restarts.
+- Rate limits are in memory and reset when the process restarts. Behind a proxy, set `TRUST_PROXY` to the number of proxy hops; setting it without a proxy lets clients spoof their IP.
 - Don't expose the server publicly without TLS and an authenticated proxy.
 - A draft stuck in `queuing` (from a crash mid-push) becomes claimable again after 10 minutes. Check Buffer for a duplicate before retrying.
