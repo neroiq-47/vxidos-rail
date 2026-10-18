@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {HttpError, badRequest, notFound} from './errors.js';
 import {draftBatch} from './rail.js';
 import * as buffer from './buffer.js';
+import {SEND_MODES, checkDueAt} from './buffer.js';
 import * as store from './store.js';
 import {isId} from './validate.js';
 import {logger} from './log.js';
@@ -11,7 +12,7 @@ import {providersFromEnv} from './llm.js';
 
 export const VERSION = '1.0.0';
 const PUBLIC = new URL('./public/', import.meta.url);
-const STATIC = {'/': ['index.html', 'text/html; charset=utf-8'], '/ui.js': ['ui.js', 'text/javascript; charset=utf-8'], '/ui.css': ['ui.css', 'text/css; charset=utf-8']};
+const STATIC = {'/': ['index.html', 'text/html; charset=utf-8'], '/ui.js': ['ui.js', 'text/javascript; charset=utf-8'], '/ui.css': ['ui.css', 'text/css; charset=utf-8'], '/tweetlen.js': ['tweetlen.js', 'text/javascript; charset=utf-8']};
 const SECURITY_HEADERS = {
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
   'Content-Security-Policy': "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
@@ -60,8 +61,16 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
       if (!Number.isInteger(count) || count < 1 || count > 5) throw badRequest('count must be 1-5');
       for (let i = 0; i < count; i++) if (!drafting(ip)) throw new HttpError(429, 'Draft generation rate limit reached');
       if (generating.busy) throw new HttpError(409, 'Generation already in progress');
+      // Check the creation caps (daily and weekly) before spending LLM calls; generate only what still fits.
+      const {creation} = await store.stats();
+      if (creation.remaining <= 0) throw store.creationCapError(creation);
+      const n = Math.min(count, creation.remaining);
       generating.busy = true;
-      try { return [201, await draftBatch(count, {pillar, generate, source: 'api'})]; }
+      try {
+        const out = await draftBatch(n, {pillar, generate, source: 'api'});
+        if (n < count) out.errors.push(`only ${n} of ${count} generated: ${creation.window} draft cap is ${creation.cap}`);
+        return [201, out];
+      }
       finally { generating.busy = false; }
     }],
     ['PATCH', /^\/drafts\/([^/]+)$/, async (req, [, id]) => {
@@ -73,13 +82,16 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
       return [200, await store.reviewDraft(checkId(id), decision, reviewer, note)];
     }],
     ['POST', /^\/drafts\/([^/]+)\/queue$/, async (req, [, id]) => {
-      const {reviewer} = await readJson(req);
+      const {reviewer, mode = 'draft', dueAt} = await readJson(req);
+      if (!SEND_MODES.includes(mode)) throw badRequest(`mode must be one of ${SEND_MODES.join(', ')}`);
+      let due;
+      if (mode === 'schedule') { try { due = checkDueAt(dueAt); } catch (e) { throw badRequest(e.message); } }
       if (!bufferApi.writesEnabled()) throw new HttpError(409, 'Buffer writes are disabled');
       const d = await store.claimForQueue(checkId(id), reviewer);
       let post;
-      try { post = await bufferApi.createBufferDraft(d.text); }
+      try { post = await bufferApi.createBufferPost(d.text, {mode, dueAt: due}); }
       catch (e) { await store.failQueue(d.id, e.message); throw new HttpError(502, e.message); }
-      return [200, await store.finishQueue(d.id, post.id, reviewer)];
+      return [200, await store.finishQueue(d.id, post.id, reviewer, {sendMode: mode, dueAt: post.dueAt || due || null})];
     }],
     ['GET', /^\/buffer\/check$/, async () => [200, await wrapUpstream(() => bufferApi.verifyBufferConnection())]],
     ['GET', /^\/buffer\/channels$/, async () => [200, await wrapUpstream(() => bufferApi.listChannels())]]

@@ -8,23 +8,40 @@ export const STATUSES = ['pending_approval', 'approved', 'rejected', 'queuing', 
 const STALE_LOCK_MS = 30_000;
 const STALE_QUEUING_MS = 10 * 60_000;
 const MAX_EVENTS = 5000;
-const WEEK_MS = 7 * 24 * 3600_000;
-const DEFAULT_WEEKLY_POST_CAP = 200;
-export const weeklyCap = () => {
-  const n = Number(process.env.WEEKLY_POST_CAP ?? DEFAULT_WEEKLY_POST_CAP);
-  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_WEEKLY_POST_CAP;
+const DAY_MS = 24 * 3600_000;
+const WEEK_MS = 7 * DAY_MS;
+const capFromEnv = (name, fallback) => {
+  const n = Number(process.env[name] ?? fallback);
+  return Number.isInteger(n) && n >= 0 ? n : fallback;
 };
-// Rolling 7-day window: every post sent to Buffer (or mid-send) counts until it is a week old.
-function weeklyUsage(drafts, cap = weeklyCap(), at = Date.now()) {
-  const since = at - WEEK_MS;
-  const times = drafts.flatMap(d =>
-    d.status === 'queued' && Date.parse(d.queuedAt) > since ? [Date.parse(d.queuedAt)] :
-    d.status === 'queuing' ? [Date.parse(d.queuingAt)] : []).sort((a, b) => a - b);
-  const used = times.length;
-  // The slot that frees soonest is the oldest send still inside the window.
-  const nextSlotAt = used >= cap && used ? new Date(times[used - cap] + WEEK_MS).toISOString() : null;
+export const weeklyCap = () => capFromEnv('WEEKLY_POST_CAP', 200);
+// Generation is sized to what can actually be posted: by default no more drafts per week than the
+// weekly post cap, spread evenly per day. DAILY_DRAFT_CAP / WEEKLY_DRAFT_CAP override with a number.
+const derivedCap = (name, derived) => /^\d+$/.test(String(process.env[name] ?? '').trim()) ? Number(process.env[name]) : derived;
+export const weeklyDraftCap = () => derivedCap('WEEKLY_DRAFT_CAP', weeklyCap());
+export const dailyDraftCap = () => derivedCap('DAILY_DRAFT_CAP', Math.ceil(weeklyDraftCap() / 7));
+
+// Rolling-window usage; the slot that frees soonest is the oldest event still inside the window.
+function windowUsage(times, cap, windowMs, at = Date.now()) {
+  const inWindow = times.filter(t => t > at - windowMs).sort((a, b) => a - b);
+  const used = inWindow.length;
+  const nextSlotAt = used >= cap && used ? new Date(inWindow[used - cap] + windowMs).toISOString() : null;
   return {cap, used, remaining: Math.max(0, cap - used), nextSlotAt};
 }
+// Every post sent to Buffer (or mid-send) counts for 7 days.
+const weeklyUsage = drafts => windowUsage(drafts.flatMap(d =>
+  d.status === 'queued' ? [Date.parse(d.queuedAt)] : d.status === 'queuing' ? [Date.parse(d.queuingAt)] : []), weeklyCap(), WEEK_MS);
+// Every draft created counts for 24 hours, whatever happened to it since (so rejecting doesn't refund).
+const createdTimes = drafts => drafts.map(d => Date.parse(d.createdAt));
+const dailyDraftUsage = drafts => windowUsage(createdTimes(drafts), dailyDraftCap(), DAY_MS);
+const weeklyDraftUsage = drafts => windowUsage(createdTimes(drafts), weeklyDraftCap(), WEEK_MS);
+// Whichever creation window is tighter decides how many drafts may be made right now.
+export function creationBudget(drafts) {
+  const day = dailyDraftUsage(drafts), week = weeklyDraftUsage(drafts);
+  return day.remaining <= week.remaining ? {...day, window: 'daily'} : {...week, window: 'weekly'};
+}
+export const creationCapError = b => capError(b.window === 'daily' ? 'Daily draft creation cap reached' : 'Weekly draft creation cap reached', b);
+const capError = (what, u) => new HttpError(429, `${what} (${u.used}/${u.cap})` + (u.nextSlotAt ? `; next slot frees at ${u.nextSlotAt}` : ''));
 const dataPath = () => resolve(process.env.RAIL_DATA_PATH || './data/drafts.json');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const now = () => new Date().toISOString();
@@ -78,6 +95,8 @@ const event = (db, type, id, extra = {}) => { const e = {type, id, at: now(), ..
 export async function saveDraft(text, meta = {}) {
   const clean = validateDraft(text), hash = hashText(clean);
   return transaction(db => {
+    const budget = creationBudget(db.drafts);
+    if (budget.remaining <= 0) throw creationCapError(budget);
     if (db.drafts.some(d => d.hash === hash)) throw conflict('Duplicate draft detected');
     const at = now();
     const entry = {id: randomUUID(), text: clean, hash, status: 'pending_approval', pillar: meta.pillar || null, source: meta.source || 'manual', ...(meta.provider ? {provider: meta.provider, model: meta.model} : {}), createdAt: at, updatedAt: at};
@@ -123,19 +142,20 @@ export async function claimForQueue(id, reviewer) {
     if (d.status !== 'approved' && !stale) throw conflict(d.status === 'queued' ? 'Draft already queued' : 'Only approved drafts can be queued');
     // Checked inside the transaction so concurrent sends can't overshoot the cap.
     const week = weeklyUsage(db.drafts.filter(x => x.id !== id));
-    if (week.remaining <= 0) throw new HttpError(429, `Weekly posting cap reached (${week.used}/${week.cap})` + (week.nextSlotAt ? `; next slot frees at ${week.nextSlotAt}` : ''));
+    if (week.remaining <= 0) throw capError('Weekly posting cap reached', week);
     Object.assign(d, {status: 'queuing', queuingAt: now(), updatedAt: now()});
     event(db, 'draft_queuing', id, {reviewer});
     return {...d};
   });
 }
-export async function finishQueue(id, bufferPostId, reviewer) {
+// sendMode: 'draft' (Buffer draft), 'queue' (next Buffer slot) or 'schedule' (exact time); dueAt is Buffer's publish time.
+export async function finishQueue(id, bufferPostId, reviewer, {sendMode = 'draft', dueAt = null} = {}) {
   return transaction(db => {
     const d = find(db, id);
     const at = now();
-    Object.assign(d, {status: 'queued', bufferPostId, queuedAt: at, queuedBy: reviewer, updatedAt: at});
+    Object.assign(d, {status: 'queued', bufferPostId, queuedAt: at, queuedBy: reviewer, updatedAt: at, sendMode, dueAt});
     delete d.queueError; delete d.queuingAt;
-    event(db, 'draft_queued', id, {reviewer, bufferPostId});
+    event(db, 'draft_queued', id, {reviewer, bufferPostId, sendMode, ...(dueAt ? {dueAt} : {})});
     return d;
   });
 }
@@ -163,5 +183,5 @@ export async function stats() {
   const {drafts} = await readDb(dataPath());
   const counts = Object.fromEntries(STATUSES.map(s => [s, 0]));
   for (const d of drafts) counts[d.status] = (counts[d.status] || 0) + 1;
-  return {counts, total: drafts.length, weekly: weeklyUsage(drafts)};
+  return {counts, total: drafts.length, weekly: weeklyUsage(drafts), daily: dailyDraftUsage(drafts), weeklyDrafts: weeklyDraftUsage(drafts), creation: creationBudget(drafts)};
 }

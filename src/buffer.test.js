@@ -50,3 +50,16 @@ test('checkBufferSetup lists channels and validates BUFFER_CHANNEL_ID', async ()
   r = await checkBufferSetup(fake(resp()));
   assert.equal(r.message, 'buffer channel ok');
 });
+test('createBufferPost sends the documented queue / customScheduled fields', async () => {
+  const {createBufferPost} = await import('./buffer.js');
+  process.env.BUFFER_WRITES_ENABLED = 'true'; process.env.BUFFER_CHANNEL_ID = 'ch_1';
+  let f = fake([{data: {createPost: {post: {id: 'p2', dueAt: '2030-01-01T09:00:00Z'}}}}]);
+  await createBufferPost('queued post text', {mode: 'queue', fetchImpl: f});
+  assert.match(f.calls[0].body.query, /mode: addToQueue \}/); assert.doesNotMatch(f.calls[0].body.query, /saveToDraft/);
+  const due = new Date(Date.now() + 86400_000).toISOString();
+  f = fake([{data: {createPost: {post: {id: 'p3', dueAt: due}}}}]);
+  const p = await createBufferPost('scheduled post text', {mode: 'schedule', dueAt: due, fetchImpl: f});
+  assert.equal(p.dueAt, due);
+  assert.ok(f.calls[0].body.query.includes(`mode: customScheduled, dueAt: "${due}"`));
+  await assert.rejects(createBufferPost('x'.repeat(20), {mode: 'schedule', dueAt: 'tomorrow', fetchImpl: fake([])}), /ISO 8601/);
+});

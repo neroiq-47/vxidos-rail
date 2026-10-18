@@ -38,7 +38,8 @@ let timer;
 if (every > 0) {
   timer = setInterval(async () => {
     try {
-      if ((await stats()).counts.pending_approval >= maxPending) return;
+      const s = await stats();
+      if (s.counts.pending_approval >= maxPending || s.creation.remaining <= 0) return;
       const d = await draftOnce({source: 'schedule'});
       logger.info('scheduled draft created', {id: d.id});
     } catch (e) { logger.error('scheduled draft failed', {error: e.message}); }

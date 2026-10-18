@@ -45,9 +45,10 @@ docker run -p 127.0.0.1:3000:3000 --env-file .env -v vxidos-data:/data vxidos-ra
 ## Features
 - **Review dashboard** at `/`, with no build step and a strict CSP. Edit drafts inline, approve or reject them (with an optional note), push approved ones to Buffer, and view the audit trail.
 - **Generation with guardrails**:
-  - Pillar rotation: midnight lifestyle, phantom identity, digital-building progress.
+  - Pillar rotation: midnight lifestyle, phantom identity, digital-building progress, **dark web3** (rug pulls, drainers, exploits and MEV, written as security awareness rather than how-to) and **privacy protocols** (zk proofs, stealth addresses, shielded pools, Monero and Zcash, FHE and MPC). Each web3 pillar sends the model a topic guide with its theme.
+  - Crypto hype and scam bait are rejected: "to the moon", "100x gem", "buy now", "connect your wallet here", airdrop-claim lures, send-X-get-2X. Warnings that mention those things still pass.
   - Recent posts are included in the prompt so it avoids repeats.
-  - Output that fails validation (links, unverifiable financial claims, mass mentions, hashtag spam, outside 12–280 Unicode characters) is retried up to 3 times.
+  - Output that fails validation (links, unverifiable financial claims, mass mentions, hashtag spam, shorter than 12 characters, or over **280 characters as X counts them**: emoji and CJK count as 2, text is NFC-normalised. The dashboard's live `n/280` counter uses the same code, `src/public/tweetlen.js`) is retried up to 3 times.
   - Near-duplicate blocking: case, punctuation and spacing are normalised before hashing.
 - **Audited store**: a transactional JSON file with an in-process queue, a cross-process lock file, recovery of stale locks after a crash, and an append-only event log (capped at 5,000 events).
 - **Buffer integration**, verified against the examples on developers.buffer.com:
@@ -62,6 +63,19 @@ docker run -p 127.0.0.1:3000:3000 --env-file .env -v vxidos-data:/data vxidos-ra
   - Binds to localhost by default.
 - **Free backup LLM**: set `FALLBACK_LLM_PROVIDER=groq` (or `cerebras`, `openrouter`, `gemini`) plus `FALLBACK_LLM_API_KEY`. If OpenAI fails (quota, outage, bad key), the draft is written by the backup instead. OpenAI is then skipped for 5 minutes, so an exhausted quota doesn't slow down every draft. The backup also works on its own, with no OpenAI key. Each draft records which provider wrote it, and the dashboard shows it as `via groq`. Free tiers are rate-limited and their models change over time, so `FALLBACK_LLM_MODEL` overrides the default. Check each provider's free-tier terms for how your prompts are used.
 - **Weekly posting cap**: at most `WEEKLY_POST_CAP` posts (default **200**) can be sent to Buffer in any rolling 7 days. It's enforced inside the store transaction, so concurrent sends can't go over. Past the cap, sending returns `429` with the time the next slot frees up. The dashboard shows `this week used/cap`.
+- **Draft creation sized to the posting cap**: the bot never writes more drafts than it can post.
+  - Per rolling 7 days, at most `WEEKLY_DRAFT_CAP` drafts. The default equals `WEEKLY_POST_CAP`, so **200**.
+  - Per rolling 24 hours, at most `DAILY_DRAFT_CAP`. The default is the weekly figure ÷ 7, rounded up, so **29**.
+  - Both follow `WEEKLY_POST_CAP` automatically. Set a number to override; `auto` keeps the derived value.
+  - Covers the dashboard, the API, the CLI and autopilot. It's checked before any LLM call, so a capped request costs nothing.
+  - A batch that would go over is cut down to fit and says which cap applied. Rejected drafts still count.
+  - The dashboard shows `drafts today` and `drafts this week`.
+- **Scheduling**: when sending an approved post you choose how it goes to Buffer:
+  - **as Buffer draft** (the default): nothing publishes until you schedule it inside Buffer.
+  - **next Buffer slot**: joins your Buffer posting schedule.
+  - **schedule at…**: you pick a date and time in your local timezone; it's sent to Buffer as UTC and must be at least a minute ahead and within a year.
+
+  Queued and scheduled posts **publish automatically**. The publish time Buffer reports is shown on the card.
 - **Autopilot (optional)**: `DRAFT_INTERVAL_MINUTES` creates a pending draft on a timer and stops at `MAX_PENDING_DRAFTS`. It still needs human approval.
 - CI on GitHub Actions (Node 20 and 22) and a Dockerfile that runs as a non-root user.
 
@@ -79,13 +93,13 @@ All endpoints except `/`, `/ui.*` and `/health` need `Authorization: Bearer $RAI
 | Method | Path | Body / query | Notes |
 |---|---|---|---|
 | GET | `/health` | | `{ok, version, bufferWrites}` |
-| GET | `/stats` | | counts per status, plus `weekly {cap, used, remaining, nextSlotAt}` |
+| GET | `/stats` | | counts per status, plus `weekly` (sends) and `daily` / `weeklyDrafts` (drafts created) and `creation` (whichever is tighter), each `{cap, used, remaining, nextSlotAt}` |
 | GET | `/drafts` | `?status=pending_approval\|approved\|rejected\|queuing\|queued` | newest first |
 | GET | `/drafts/:id` | | |
 | POST | `/draft` | `{count?: 1-5, pillar?}` | calls the LLM (costs money); `201 {drafts, errors}` |
 | PATCH | `/drafts/:id` | `{text, editor}` | pending only; logs the previous text |
 | POST | `/drafts/:id/review` | `{decision: "approved"\|"rejected", reviewer, note?}` | |
-| POST | `/drafts/:id/queue` | `{reviewer}` | approved only; needs Buffer writes enabled; `429` once the weekly cap is reached |
+| POST | `/drafts/:id/queue` | `{reviewer, mode?: "draft"\|"queue"\|"schedule", dueAt?}` (`dueAt` = ISO time, required for `schedule`) | approved only; needs Buffer writes enabled; `429` once the weekly cap is reached |
 | GET | `/events` | `?limit=50` | audit log, newest first |
 | GET | `/buffer/check`, `/buffer/channels` | | read-only |
 

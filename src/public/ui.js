@@ -1,3 +1,4 @@
+import { tweetLength, TWEET_MAX } from '/tweetlen.js';
 const $ = id => document.getElementById(id);
 const store = {
   get(k) { try { return sessionStorage.getItem(k) || ''; } catch { return ''; } },
@@ -37,7 +38,7 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-const chars = s => [...s].length;
+const chars = s => tweetLength(s);
 function ago(iso) {
   const s = Math.round((Date.now() - new Date(iso)) / 1000);
   if (!Number.isFinite(s)) return '';
@@ -66,12 +67,16 @@ async function refresh() {
 }
 
 async function loadStats() {
-  const { counts = {}, total = 0, weekly } = await api('/stats');
+  const { counts = {}, total = 0, weekly, daily, weeklyDrafts } = await api('/stats');
   $('stats').replaceChildren(
     ...Object.entries(STATUS_LABEL).map(([k, label]) => el('span', { class: 'chip', text: label }, el('b', { text: String(counts[k] ?? 0) }))),
     el('span', { class: 'chip', text: 'total' }, el('b', { text: String(total) })),
     weekly && el('span', { class: 'chip' + (weekly.remaining ? '' : ' full'), text: 'this week', title: weekly.nextSlotAt ? `next slot ${new Date(weekly.nextSlotAt).toLocaleString()}` : 'rolling 7 days' },
-      el('b', { text: `${weekly.used}/${weekly.cap}` }))
+      el('b', { text: `${weekly.used}/${weekly.cap}` })),
+    daily && el('span', { class: 'chip' + (daily.remaining ? '' : ' full'), text: 'drafts today', title: daily.nextSlotAt ? `next slot ${new Date(daily.nextSlotAt).toLocaleString()}` : 'rolling 24 hours' },
+      el('b', { text: `${daily.used}/${daily.cap}` })),
+    weeklyDrafts && el('span', { class: 'chip' + (weeklyDrafts.remaining ? '' : ' full'), text: 'drafts this week', title: 'never more drafts per week than the weekly post cap' },
+      el('b', { text: `${weeklyDrafts.used}/${weeklyDrafts.cap}` }))
   );
 }
 
@@ -95,13 +100,13 @@ async function loadEvents() {
 async function act(btn, fn, okMsg) {
   const card = btn.closest('.card');
   card?.querySelectorAll('button').forEach(b => { b.disabled = true; });
-  try { await fn(); if (okMsg) toast(okMsg); await refresh(); }
+  try { await fn(); const msg = typeof okMsg === 'function' ? okMsg() : okMsg; if (msg) toast(msg); await refresh(); }
   catch (e) { toast(e.message, true); card?.querySelectorAll('button').forEach(b => { b.disabled = false; }); }
 }
 
 function countEl(text) {
   const n = chars(text);
-  return el('span', { class: 'count mono' + (n > 280 ? ' over' : ''), text: `${n}/280` });
+  return el('span', { class: 'count mono' + (n > TWEET_MAX ? ' over' : ''), text: `${n}/${TWEET_MAX}`, title: 'counted the way X counts: emoji and CJK count as 2' });
 }
 
 function card(d) {
@@ -112,7 +117,9 @@ function card(d) {
     countEl(d.text),
     d.provider ? el('span', { class: 'mono dim', text: `via ${d.provider}`, title: d.model || '' }) : null,
     d.reviewedBy ? el('span', { text: `by ${d.reviewedBy}` }) : null,
-    d.bufferPostId ? el('span', { class: 'mono', text: `buffer ${d.bufferPostId}` }) : null);
+    d.bufferPostId ? el('span', { class: 'mono', text: d.sendMode === 'schedule' || d.sendMode === 'queue'
+      ? `${d.sendMode === 'queue' ? 'queued' : 'scheduled'} ${d.dueAt ? new Date(d.dueAt).toLocaleString() : ''}`.trim()
+      : 'buffer draft', title: `buffer post ${d.bufferPostId}` }) : null);
   const c = el('article', { class: 'card', 'data-id': d.id }, el('p', { class: 'text', text: d.text }), meta);
   if (d.note) c.append(el('p', { class: 'note dim', text: `note: ${d.note}` }));
   if (d.queueError) c.append(el('p', { class: 'err', text: `buffer error: ${d.queueError}` }));
@@ -126,9 +133,27 @@ function card(d) {
       el('button', { type: 'button', onclick: () => editMode(c, d) }, 'edit'),
       el('button', { type: 'button', class: 'bad', onclick: () => rejectMode(c, d) }, 'reject'));
   } else if (d.status === 'approved') {
-    const b = el('button', { type: 'button', class: 'primary', disabled: !state.bufferWrites, onclick: e => act(e.currentTarget, () =>
-      api(`/drafts/${id}/queue`, { method: 'POST', body: { reviewer: state.reviewer } }), 'sent to buffer as draft') }, 'send to buffer');
-    actions.append(b);
+    // datetime-local is in the viewer's local time; the server and Buffer get UTC ISO.
+    const pad = n => String(n).padStart(2, '0');
+    const local = t => `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:${pad(t.getMinutes())}`;
+    const mode = el('select', { 'aria-label': 'how to send to buffer' },
+      el('option', { value: 'draft', text: 'as buffer draft' }),
+      el('option', { value: 'queue', text: 'next buffer slot' }),
+      el('option', { value: 'schedule', text: 'schedule at…' }));
+    const when = el('input', { type: 'datetime-local', 'aria-label': 'publish time (your local time)', hidden: true,
+      min: local(new Date(Date.now() + 2 * 60_000)), value: local(new Date(Date.now() + 3600_000)) });
+    mode.addEventListener('change', () => { when.hidden = mode.value !== 'schedule'; });
+    const done = { draft: 'sent to buffer as draft', queue: 'added to buffer queue', schedule: 'scheduled in buffer' };
+    const b = el('button', { type: 'button', class: 'primary', disabled: !state.bufferWrites, onclick: e => act(e.currentTarget, () => {
+      const body = { reviewer: state.reviewer, mode: mode.value };
+      if (mode.value === 'schedule') {
+        const t = new Date(when.value);
+        if (!when.value || Number.isNaN(t.getTime())) throw new Error('pick a publish time');
+        body.dueAt = t.toISOString();
+      }
+      return api(`/drafts/${id}/queue`, { method: 'POST', body });
+    }, () => done[mode.value]) }, 'send');
+    actions.append(mode, when, b);
     if (!state.bufferWrites) {
       b.setAttribute('aria-describedby', `hint-${d.id}`);
       actions.append(el('span', { class: 'hint', id: `hint-${d.id}`, text: 'buffer writes disabled on server' }));
@@ -142,9 +167,12 @@ function editMode(c, d) {
   const ta = el('textarea', { 'aria-label': 'edit draft text', maxlength: 600 });
   ta.value = d.text;
   const cnt = countEl(d.text);
-  ta.addEventListener('input', () => { const n = countEl(ta.value); c.querySelector('.edit-count').replaceChildren(n); });
   const save = el('button', { type: 'button', class: 'primary', onclick: e => act(e.currentTarget, () =>
     api(`/drafts/${encodeURIComponent(d.id)}`, { method: 'PATCH', body: { text: ta.value, editor: state.reviewer } }), 'saved') }, 'save');
+  ta.addEventListener('input', () => {
+    c.querySelector('.edit-count').replaceChildren(countEl(ta.value));
+    save.disabled = chars(ta.value.trim()) > TWEET_MAX;
+  });
   const cancel = el('button', { type: 'button', class: 'ghost', onclick: () => c.replaceWith(card(d)) }, 'cancel');
   c.replaceChildren(ta, el('div', { class: 'meta' }, el('span', { class: 'edit-count' }, cnt)), el('div', { class: 'actions' }, save, cancel));
   ta.focus();
