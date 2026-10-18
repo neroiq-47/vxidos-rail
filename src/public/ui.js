@@ -110,6 +110,7 @@ function card(d) {
     d.pillar ? el('span', { class: 'tag', text: d.pillar }) : null,
     el('span', { text: ago(d.createdAt), title: d.createdAt }),
     countEl(d.text),
+    d.provider ? el('span', { class: 'mono dim', text: `via ${d.provider}`, title: d.model || '' }) : null,
     d.reviewedBy ? el('span', { text: `by ${d.reviewedBy}` }) : null,
     d.bufferPostId ? el('span', { class: 'mono', text: `buffer ${d.bufferPostId}` }) : null);
   const c = el('article', { class: 'card', 'data-id': d.id }, el('p', { class: 'text', text: d.text }), meta);

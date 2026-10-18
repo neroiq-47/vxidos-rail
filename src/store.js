@@ -80,7 +80,7 @@ export async function saveDraft(text, meta = {}) {
   return transaction(db => {
     if (db.drafts.some(d => d.hash === hash)) throw conflict('Duplicate draft detected');
     const at = now();
-    const entry = {id: randomUUID(), text: clean, hash, status: 'pending_approval', pillar: meta.pillar || null, source: meta.source || 'manual', createdAt: at, updatedAt: at};
+    const entry = {id: randomUUID(), text: clean, hash, status: 'pending_approval', pillar: meta.pillar || null, source: meta.source || 'manual', ...(meta.provider ? {provider: meta.provider, model: meta.model} : {}), createdAt: at, updatedAt: at};
     db.drafts.push(entry); event(db, 'draft_created', entry.id, {source: entry.source});
     return entry;
   });

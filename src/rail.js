@@ -1,16 +1,13 @@
 import 'dotenv/config';
-import OpenAI from 'openai';
 import {BRAND, PILLARS} from './brand.js';
 import {saveDraft, listDrafts} from './store.js';
 import {validateDraft} from './validate.js';
 import {HttpError, badRequest} from './errors.js';
 export {validateDraft} from './validate.js';
 
-let client;
-const openai = () => {
-  if (!process.env.OPENAI_API_KEY) throw new HttpError(503, 'OPENAI_API_KEY missing');
-  return client ||= new OpenAI({apiKey: process.env.OPENAI_API_KEY, timeout: 30_000, maxRetries: 2});
-};
+import {createGenerator} from './llm.js';
+
+let llm;
 
 export function buildMessages(pillar, recent = []) {
   const avoid = recent.length ? ` Do not repeat or closely paraphrase these recent posts:\n${recent.map(t => `- ${t}`).join('\n')}` : '';
@@ -20,12 +17,9 @@ export function buildMessages(pillar, recent = []) {
   ];
 }
 
+// OpenAI first, then the free fallback provider if configured (see llm.js).
 export async function generateDraft({pillar, recent} = {}) {
-  const result = await openai().chat.completions.create({
-    model: process.env.OPENAI_MODEL || 'gpt-4.1-mini', temperature: 0.9, max_tokens: 120,
-    messages: buildMessages(pillar, recent)
-  });
-  return result.choices[0]?.message?.content || '';
+  return (llm ||= createGenerator())(buildMessages(pillar, recent));
 }
 
 // Rotate to whichever pillar has been used least recently.
@@ -47,8 +41,10 @@ export async function draftOnce({pillar, generate = generateDraft, attempts = 3,
       // Upstream errors carry their own HTTP status (e.g. OpenAI 401); never let that leak as ours.
       try { raw = await generate({pillar, recent}); }
       catch (e) { throw e instanceof HttpError ? e : new HttpError(502, `Generation failed: ${e.message}`); }
-      const text = validateDraft(raw);
-      return await saveDraft(text, {pillar, source});
+      // Generators may return plain text or {text, provider, model}.
+      const {text: rawText, provider = null, model = null} = typeof raw === 'string' ? {text: raw} : raw;
+      const text = validateDraft(rawText);
+      return await saveDraft(text, {pillar, source, provider, model});
     } catch (e) {
       // Only retry content problems (validation/duplicate); auth/network errors fail fast.
       if (!e.status || e.status >= 500) throw e;

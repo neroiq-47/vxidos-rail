@@ -5,6 +5,7 @@ import {createApp} from './app.js';
 import {draftOnce} from './rail.js';
 import {stats} from './store.js';
 import {logger} from './log.js';
+import {providersFromEnv} from './llm.js';
 import {checkBufferSetup} from './buffer.js';
 
 const host = process.env.HOST || '127.0.0.1'; // Dockerfile sets 0.0.0.0 for containers
@@ -22,8 +23,10 @@ catch (e) {
 let server;
 try { server = createApp({secret: process.env.RAIL_SECRET}); }
 catch (e) { logger.error('startup failed', {error: e.message}); process.exit(1); }
-server.listen(port, host, () => logger.info('VXIDOS rail listening', {host, port, dataDir, generation: Boolean(process.env.OPENAI_API_KEY)}));
-if (!process.env.OPENAI_API_KEY) logger.warn('OPENAI_API_KEY missing: dashboard works, generation will return 503');
+const providers = providersFromEnv().map(p => `${p.name}:${p.model}`);
+server.listen(port, host, () => logger.info('VXIDOS rail listening', {host, port, dataDir, generation: providers.length > 0, providers}));
+if (!providers.length) logger.warn('no LLM configured: dashboard works, generation will return 503');
+else if (providers.length === 1) logger.info('no fallback LLM: set FALLBACK_LLM_PROVIDER=groq and FALLBACK_LLM_API_KEY for a free backup');
 
 // Buffer setup check: lists channels in the logs so BUFFER_CHANNEL_ID can be picked without calling the API by hand.
 if (process.env.BUFFER_API_KEY) checkBufferSetup().then(r => logger[r.level](r.message, r.fields)).catch(e => logger.warn('buffer check failed', {error: e.message}));
