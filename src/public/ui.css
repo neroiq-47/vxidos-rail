@@ -105,3 +105,10 @@ button.busy::after { content: "…"; position: absolute; inset: 0; display: grid
 .pillars input { width: auto; margin: 0; padding: 0; accent-color: var(--accent); }
 .auto-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 12px; }
 .auto .actions .hint { flex: 1 1 200px; }
+
+.auto .check { flex-direction: row; align-items: center; gap: 8px; align-self: end; padding-bottom: 10px; }
+.auto .check input { width: auto; }
+.job { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; }
+.job progress { flex: 1 1 160px; height: 8px; accent-color: var(--accent); }
+.job[hidden], #auto-undo[hidden] { display: none; }
+#auto-status { font-size: 13px; color: var(--dim); }

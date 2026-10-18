@@ -9,17 +9,18 @@ const {createApp} = await import('./app.js');
 const secret = 'test-secret-that-is-long-enough-123';
 const posts = ['privacy is the real luxury.', 'build quietly. ship loudly.', 'the city sleeps. the work does not.', 'no face. only output.', 'midnight is a deadline.'];
 let n = 0;
-const bufferCalls = [];
+const bufferCalls = [], deleted = [];
 const fakeBuffer = {
   writesEnabled: () => true,
   createBufferPost: async (text, opts = {}) => {
     bufferCalls.push({text, ...opts}); if (text.includes('fail')) throw new Error('boom');
     return {id: 'buf_' + bufferCalls.length, dueAt: opts.mode === 'schedule' ? opts.dueAt : opts.mode === 'queue' ? '2030-01-01T09:00:00.000Z' : null};
   },
+  deleteBufferPost: async id => { deleted.push(id); if (id === 'buf_fail_delete') throw new Error('nope'); return true; },
   verifyBufferConnection: async () => ({organizations: [{id: 'org1'}]}),
   listChannels: async () => ({channels: []})
 };
-const server = createApp({secret, generate: async () => { const i = n++; return i < posts.length ? posts[i] : `${posts[i % posts.length]} ${i}`; }, bufferApi: fakeBuffer, env: {AUTH_FAIL_LIMIT: '3'}});
+const server = createApp({secret, generate: async () => { const i = n++; return i < posts.length ? posts[i] : `${posts[i % posts.length]} ${i}`; }, bufferApi: fakeBuffer, env: {AUTH_FAIL_LIMIT: '3', BUFFER_PACE_MS: '0'}});
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 test.after(() => server.close());
@@ -118,8 +119,9 @@ test('daily draft creation cap: generation stops at the cap and says when a slot
   } finally { delete process.env.DAILY_DRAFT_CAP; }
 });
 
-test('schedule-batch: schedules approved drafts from chosen pillars, spaced out, through Buffer', async () => {
-  // Approve three fresh drafts with known pillars.
+const waitJob = async id => { for (let i = 0; i < 100; i++) { const j = (await api('GET', `/jobs/${id}`)).body; if (j.state !== 'running') return j; await new Promise(r => setTimeout(r, 20)); } throw new Error('job stuck'); };
+
+test('schedule-batch: preview, then a background job schedules approved drafts at the planned times', async () => {
   const ids = [];
   for (const [t, p] of [['batch one in the dark.', 'dark web3'], ['batch two, shielded.', 'privacy protocols'], ['batch three in the dark.', 'dark web3']]) {
     const {body: {drafts: [x]}} = await api('POST', '/draft', {pillar: p});
@@ -127,20 +129,62 @@ test('schedule-batch: schedules approved drafts from chosen pillars, spaced out,
     await api('POST', `/drafts/${x.id}/review`, {decision: 'approved', reviewer: 'owner'});
     ids.push(x.id);
   }
+  const t0 = Date.now() + 2 * 3600_000;
+  const times = Array.from({length: 5}, (_, i) => new Date(t0 + i * 3600_000).toISOString());
+  assert.equal((await api('POST', '/schedule-batch', {reviewer: 'owner', pillars: ['nope'], times})).status, 400);
+  assert.equal((await api('POST', '/schedule-batch', {reviewer: 'owner', times: [times[1], times[0]]})).status, 400, 'out of order');
+  assert.equal((await api('POST', '/schedule-batch', {reviewer: 'owner', times: Array(101).fill(times[0])})).status, 400, 'over 100');
+  const pv = await api('POST', '/schedule-batch/preview', {pillars: ['dark web3', 'privacy protocols'], times});
+  assert.equal(pv.status, 200); assert.ok(pv.body.items.length >= 3); assert.equal(pv.body.blocked, 0);
   const before = bufferCalls.length;
-  const startAt = new Date(Date.now() + 2 * 3600_000).toISOString();
-  assert.equal((await api('POST', '/schedule-batch', {reviewer: 'owner', pillars: ['nope'], startAt})).status, 400);
-  const r = await api('POST', '/schedule-batch', {reviewer: 'owner', count: 10, pillars: ['dark web3', 'privacy protocols'], startAt, intervalMinutes: 60});
-  assert.equal(r.status, 200);
-  const mine = r.body.scheduled.filter(x => ids.includes(x.id));
-  assert.equal(mine.length, 3);
-  const calls = bufferCalls.slice(before);
-  assert.ok(calls.every(c => c.mode === 'schedule'));
-  const dues = r.body.scheduled.map(x => Date.parse(x.dueAt));
-  for (let i = 1; i < dues.length; i++) assert.equal(dues[i] - dues[i - 1], 3600_000, 'spaced one hour apart');
-  assert.equal(dues[0], Date.parse(startAt));
-  assert.match(r.body.errors.join(' '), /only \d+ approved/);
-  assert.equal((await api('POST', '/schedule-batch', {reviewer: 'owner', pillars: ['dark web3'], startAt})).status, 409, 'nothing left to schedule');
+  const r = await api('POST', '/schedule-batch', {reviewer: 'owner', pillars: ['dark web3', 'privacy protocols'], times});
+  assert.equal(r.status, 202); assert.match(r.body.notes.join(' '), /only \d+ approved/);
+  const job = await waitJob(r.body.job.id);
+  assert.equal(job.state, 'done');
+  assert.deepEqual(job.results.map(x => x.dueAt), times.slice(0, job.results.length), 'each post at its planned time');
+  assert.ok(ids.every(id => job.results.some(x => x.id === id)));
+  assert.ok(bufferCalls.slice(before).every(c => c.mode === 'schedule'));
+  assert.equal((await api('POST', '/schedule-batch', {reviewer: 'owner', pillars: ['dark web3'], times})).status, 409, 'nothing left');
+  // Undo the whole batch: every post is deleted in Buffer and returns to approved.
+  const u = await api('POST', `/jobs/${job.id}/unschedule`, {reviewer: 'owner'});
+  assert.equal(u.status, 202);
+  const uj = await waitJob(u.body.job.id);
+  assert.equal(uj.state, 'done'); assert.equal(uj.results.length, job.results.length);
+  for (const x of job.results) assert.equal((await api('GET', `/drafts/${x.id}`)).body.status, 'approved');
+  assert.equal((await api('GET', '/jobs/not-a-job')).status, 404);
+});
+
+test('unschedule one post; a failed Buffer delete changes nothing', async () => {
+  const {body: {drafts: [x]}} = await api('POST', '/draft', {});
+  await api('PATCH', `/drafts/${x.id}`, {text: 'unschedule me before dawn.', editor: 'owner'});
+  await api('POST', `/drafts/${x.id}/review`, {decision: 'approved', reviewer: 'owner'});
+  const due = new Date(Date.now() + 5 * 3600_000).toISOString();
+  const q = await api('POST', `/drafts/${x.id}/queue`, {reviewer: 'owner', mode: 'schedule', dueAt: due});
+  assert.equal(q.body.status, 'queued');
+  const u = await api('POST', `/drafts/${x.id}/unschedule`, {reviewer: 'owner'});
+  assert.equal(u.status, 200); assert.equal(u.body.status, 'approved'); assert.equal(u.body.bufferPostId, undefined);
+  assert.equal(deleted.at(-1), q.body.bufferPostId);
+  assert.equal((await api('POST', `/drafts/${x.id}/unschedule`, {reviewer: 'owner'})).status, 409, 'not sent any more');
+});
+
+test('jobs can be cancelled mid-run', async () => {
+  const {createApp: mk} = await import('./app.js');
+  let release; const gate = new Promise(r => { release = r; });
+  const slow = mk({secret, generate: async () => 'x', bufferApi: fakeBuffer, env: {BUFFER_PACE_MS: '1'}, sleep: () => gate});
+  await new Promise(r => slow.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${slow.address().port}`;
+  const call = (m, p, b) => fetch(url + p, {method: m, headers: {authorization: `Bearer ${secret}`, 'content-type': 'application/json'}, body: b && JSON.stringify(b)}).then(async r => ({status: r.status, body: await r.json()}));
+  try {
+    const approved = (await call('GET', '/drafts?status=approved')).body.drafts;
+    assert.ok(approved.length >= 2, 'needs approved drafts from earlier tests');
+    const t0 = Date.now() + 3 * 3600_000;
+    const r = await call('POST', '/schedule-batch', {reviewer: 'owner', times: [0, 1, 2].map(i => new Date(t0 + i * 3600_000).toISOString())});
+    assert.equal(r.status, 202);
+    assert.equal((await call('POST', '/schedule-batch', {reviewer: 'owner', times: [new Date(t0).toISOString()]})).status, 409, 'one batch at a time');
+    await call('POST', `/jobs/${r.body.job.id}/cancel`); release();
+    let j; for (let i = 0; i < 100 && (j = (await call('GET', `/jobs/${r.body.job.id}`)).body).state === 'running'; i++) await new Promise(z => setTimeout(z, 10));
+    assert.equal(j.state, 'cancelled', JSON.stringify(j)); assert.equal(j.done, 1, 'stopped after the first post'); assert.equal(j.results.length + j.errors.length, 1);
+  } finally { slow.close(); }
 });
 
 test('auth: wrong token is 401, then locked out even with right token', async () => {

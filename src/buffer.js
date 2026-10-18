@@ -11,8 +11,10 @@ export async function bufferGraphql(query, variables = {}, fetchImpl = fetch) {
     body: JSON.stringify({query, variables}), signal: AbortSignal.timeout(15000)
   });
   let body;
-  try { body = await response.json(); } catch { throw new Error(`Buffer API error: HTTP ${response.status}`); }
-  if (!response.ok || body.errors?.length) throw new Error(`Buffer API error: ${JSON.stringify(body.errors || body).slice(0, 300)}`);
+  // status lets callers tell a rate limit (429, Buffer allows 100 requests / 15 min) from other failures.
+  const fail = msg => Object.assign(new Error(msg), {status: response.status, retryAfter: Number(response.headers?.get?.('retry-after')) || null});
+  try { body = await response.json(); } catch { throw fail(`Buffer API error: HTTP ${response.status}`); }
+  if (!response.ok || body.errors?.length) throw fail(`Buffer API error: ${JSON.stringify(body.errors || body).slice(0, 300)}`);
   return body.data;
 }
 
@@ -61,6 +63,15 @@ export async function createBufferPost(text, {mode = 'draft', dueAt, channelId =
   return r.post;
 }
 export const createBufferDraft = (text, opts = {}) => createBufferPost(text, {...opts, mode: 'draft'});
+
+// deletePost(input: {id}) returns DeletePostSuccess | VoidMutationError { message } (developers.buffer.com reference).
+export async function deleteBufferPost(postId, {fetchImpl} = {}) {
+  if (process.env.BUFFER_WRITES_ENABLED !== 'true') throw new Error('Buffer writes disabled (set BUFFER_WRITES_ENABLED=true)');
+  const data = await bufferGraphql(`mutation DeletePost { deletePost(input: { id: ${gqlId(postId)} }) { __typename ... on VoidMutationError { message } } }`, {}, fetchImpl);
+  const r = data.deletePost;
+  if (r?.__typename !== 'DeletePostSuccess') throw new Error(`Buffer refused delete: ${r?.message || 'unknown error'}`);
+  return true;
+}
 
 // Read-only startup check: reports available channels and whether BUFFER_CHANNEL_ID matches one of them.
 export async function checkBufferSetup(fetchImpl) {

@@ -1,3 +1,4 @@
+import { planSlots } from '/slots.js';
 import { tweetLength, TWEET_MAX } from '/tweetlen.js';
 const $ = id => document.getElementById(id);
 const store = {
@@ -159,6 +160,10 @@ function card(d) {
       actions.append(el('span', { class: 'hint', id: `hint-${d.id}`, text: 'buffer writes disabled on server' }));
     }
   }
+  if (d.status === 'queued' && state.bufferWrites && (d.sendMode === 'draft' || !d.dueAt || Date.parse(d.dueAt) > Date.now())) {
+    actions.append(el('button', { type: 'button', class: 'ghost', onclick: e => act(e.currentTarget, () =>
+      api(`/drafts/${id}/unschedule`, { method: 'POST', body: { reviewer: state.reviewer } }), 'unscheduled; back in approved') }, 'unschedule'));
+  }
   if (actions.childNodes.length) c.append(actions);
   return c;
 }
@@ -204,45 +209,101 @@ async function generate() {
 }
 
 // Auto-schedule: pillar list comes from the generate picker so there's one source of truth in the page.
+const COUNTS = [1, 2, 3, 4, 5, 10, 25, 50, 100];
 function setupAuto() {
   const pillars = [...$('gen-pillar').options].map(o => o.value).filter(Boolean);
   $('auto-pillars').append(...pillars.map(p => el('label', {}, el('input', { type: 'checkbox', value: p, checked: true }), p)));
-  for (let n = 1; n <= 10; n++) $('auto-count').append(el('option', { value: n, text: String(n), selected: n === 10 }));
-  const pad = n => String(n).padStart(2, '0');
-  const t = new Date(Date.now() + 3600_000); t.setMinutes(0, 0, 0);
-  $('auto-start').value = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:00`;
-  $('auto-count').addEventListener('change', () => { $('auto-btn').textContent = `auto-schedule ${$('auto-count').value}`; });
+  COUNTS.forEach(n => $('auto-count').append(el('option', { value: n, text: String(n), selected: n === 100 })));
+  for (let n = 1; n <= 12; n++) $('auto-perday').append(el('option', { value: n, text: String(n), selected: n === 8 }));
+  const t = new Date(), pad = n => String(n).padStart(2, '0');
+  $('auto-start').value = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
+  const relabel = () => { $('auto-btn').textContent = `schedule ${$('auto-count').value}`; $('auto-plan').textContent = ''; autoArmed = 0; state.plan = null; };
+  ['auto-count', 'auto-perday', 'auto-from', 'auto-to', 'auto-start', 'auto-jitter'].forEach(id => $(id).addEventListener('change', relabel));
+  $('auto-pillars').addEventListener('change', relabel);
+  $('auto-preview').addEventListener('click', () => autoPreview().catch(e => toast(e.message, true)));
+  $('auto-btn').addEventListener('click', autoSchedule);
+  $('auto-cancel').addEventListener('click', () => state.job && api(`/jobs/${state.job.id}/cancel`, { method: 'POST', body: {} }).catch(e => toast(e.message, true)));
+  $('auto-undo').addEventListener('click', autoUndo);
+  relabel();
+}
+
+// Times are planned here, in the viewer's timezone, then sent to the server as exact UTC instants.
+function autoRequest() {
+  const pillars = [...$('auto-pillars').querySelectorAll('input:checked')].map(i => i.value);
+  if (!pillars.length) throw new Error('pick at least one pillar');
+  const [y, m, d] = $('auto-start').value.split('-').map(Number);
+  if (!y) throw new Error('pick a start date');
+  const day = new Date(y, m - 1, d), now = new Date();
+  const times = planSlots({ count: Number($('auto-count').value), start: day > now ? day : now, perDay: Number($('auto-perday').value),
+    from: $('auto-from').value || '09:00', to: $('auto-to').value || '23:00', jitterMin: $('auto-jitter').checked ? 10 : 0 });
+  return { reviewer: state.reviewer, pillars, times };
+}
+
+// The previewed times (jitter included) are kept and sent on confirm, so what you saw is what gets scheduled.
+async function autoPreview({ reuse = false } = {}) {
+  const req = reuse && state.plan ? state.plan : autoRequest();
+  state.plan = req;
+  const p = await api('/schedule-batch/preview', { method: 'POST', body: { pillars: req.pillars, times: req.times } });
+  const ok = p.items.filter(x => x.fits);
+  const span = ok.length ? `${new Date(ok[0].dueAt).toLocaleString()} → ${new Date(ok[ok.length - 1].dueAt).toLocaleString()}` : 'nothing to schedule';
+  const short = p.available < p.requested ? ` · only ${p.available} approved` : '';
+  const blocked = p.blocked ? ` · ${p.blocked} blocked by the weekly cap` : '';
+  $('auto-plan').textContent = `${ok.length} of ${p.requested} posts · ${span}${short}${blocked}`;
+  return p;
 }
 
 let autoArmed = 0;
 async function autoSchedule() {
   const btn = $('auto-btn');
-  const pillars = [...$('auto-pillars').querySelectorAll('input:checked')].map(i => i.value);
-  if (!pillars.length) return toast('pick at least one pillar', true);
-  const start = new Date($('auto-start').value);
-  if (Number.isNaN(start.getTime())) return toast('pick a start time', true);
-  const count = Number($('auto-count').value);
-  // Two-step confirm: these posts publish on their own.
-  if (Date.now() - autoArmed > 5000) {
+  // Two-step confirm (with a fresh preview): these posts publish on their own.
+  if (Date.now() - autoArmed > 8000) {
+    try { const p = await autoPreview({ reuse: true }); if (!p.items.some(x => x.fits)) return; } catch (e) { return toast(e.message, true); }
     autoArmed = Date.now();
-    btn.textContent = `confirm: publish ${count} automatically`;
-    setTimeout(() => { if (Date.now() - autoArmed >= 5000) btn.textContent = `auto-schedule ${$('auto-count').value}`; }, 5000);
+    btn.textContent = 'confirm: publish automatically';
+    setTimeout(() => { if (autoArmed && Date.now() - autoArmed >= 8000) btn.textContent = `schedule ${$('auto-count').value}`; }, 8000);
     return;
   }
   autoArmed = 0;
-  btn.disabled = true; btn.setAttribute('aria-busy', 'true');
+  const req = state.plan;
+  if (!req) return toast('preview first', true);
+  btn.disabled = true;
   try {
-    const { scheduled = [], errors = [] } = await api('/schedule-batch', { method: 'POST', body: {
-      reviewer: state.reviewer, count, pillars, startAt: start.toISOString(), intervalMinutes: Number($('auto-every').value) } });
-    if (scheduled.length) {
-      const last = new Date(scheduled[scheduled.length - 1].dueAt).toLocaleString();
-      toast(`${scheduled.length} scheduled in buffer, last at ${last}`);
-    }
-    errors.forEach(e => toast(e, true));
-    selectTab('queued');
-    await refresh();
-  } catch (e) { toast(e.message, true); }
-  finally { btn.disabled = !state.bufferWrites; btn.removeAttribute('aria-busy'); btn.textContent = `auto-schedule ${$('auto-count').value}`; }
+    const { job, notes = [] } = await api('/schedule-batch', { method: 'POST', body: req });
+    notes.forEach(n => toast(n));
+    watchJob(job);
+  } catch (e) { toast(e.message, true); btn.disabled = !state.bufferWrites; }
+  btn.textContent = `schedule ${$('auto-count').value}`;
+}
+
+async function autoUndo() {
+  const btn = $('auto-undo');
+  if (btn.dataset.armed !== '1') { btn.dataset.armed = '1'; btn.textContent = 'confirm: unschedule all'; return; }
+  btn.dataset.armed = '';
+  try { const { job } = await api(`/jobs/${state.lastScheduleJob}/unschedule`, { method: 'POST', body: { reviewer: state.reviewer } }); watchJob(job); }
+  catch (e) { toast(e.message, true); }
+}
+
+// Poll a background job (Buffer pacing makes 100 posts take ~17 min) and show progress.
+function watchJob(job) {
+  state.job = job;
+  const box = $('auto-job'), bar = $('auto-progress');
+  box.hidden = false; $('auto-undo').hidden = true; $('auto-cancel').hidden = false;
+  const tick = async () => {
+    let j;
+    try { j = await api(`/jobs/${state.job.id}`); } catch (e) { toast(e.message, true); return; }
+    state.job = j;
+    bar.max = j.total || 1; bar.value = j.done;
+    const verb = j.kind === 'unschedule' ? 'unscheduled' : 'scheduled';
+    const eta = j.state === 'running' ? ` · about ${Math.ceil((j.total - j.done) * 10 / 60)} min left` : '';
+    $('auto-status').textContent = `${j.results.length}/${j.total} ${verb} · ${j.state}${eta}`;
+    if (j.state === 'running') { setTimeout(tick, 2000); return; }
+    $('auto-cancel').hidden = true; $('auto-btn').disabled = !state.bufferWrites;
+    j.errors.slice(0, 3).forEach(e => toast(e, true));
+    if (j.kind === 'schedule' && j.results.length) { state.lastScheduleJob = j.id; const u = $('auto-undo'); u.hidden = false; u.textContent = 'unschedule this batch'; }
+    toast(`${j.results.length} ${verb}${j.state === 'done' ? '' : ` (${j.state})`}`);
+    refresh();
+  };
+  tick();
 }
 
 function selectTab(status) {
@@ -263,7 +324,6 @@ $('signin-form').addEventListener('submit', e => {
 $('signout').addEventListener('click', signOut);
 $('gen-btn').addEventListener('click', generate);
 setupAuto();
-$('auto-btn').addEventListener('click', autoSchedule);
 document.querySelector('.tabs').addEventListener('click', e => {
   const t = e.target.closest('[role=tab]');
   if (!t) return;
