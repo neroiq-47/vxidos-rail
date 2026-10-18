@@ -8,6 +8,23 @@ export const STATUSES = ['pending_approval', 'approved', 'rejected', 'queuing', 
 const STALE_LOCK_MS = 30_000;
 const STALE_QUEUING_MS = 10 * 60_000;
 const MAX_EVENTS = 5000;
+const WEEK_MS = 7 * 24 * 3600_000;
+const DEFAULT_WEEKLY_POST_CAP = 200;
+export const weeklyCap = () => {
+  const n = Number(process.env.WEEKLY_POST_CAP ?? DEFAULT_WEEKLY_POST_CAP);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_WEEKLY_POST_CAP;
+};
+// Rolling 7-day window: every post sent to Buffer (or mid-send) counts until it is a week old.
+function weeklyUsage(drafts, cap = weeklyCap(), at = Date.now()) {
+  const since = at - WEEK_MS;
+  const times = drafts.flatMap(d =>
+    d.status === 'queued' && Date.parse(d.queuedAt) > since ? [Date.parse(d.queuedAt)] :
+    d.status === 'queuing' ? [Date.parse(d.queuingAt)] : []).sort((a, b) => a - b);
+  const used = times.length;
+  // The slot that frees soonest is the oldest send still inside the window.
+  const nextSlotAt = used >= cap && used ? new Date(times[used - cap] + WEEK_MS).toISOString() : null;
+  return {cap, used, remaining: Math.max(0, cap - used), nextSlotAt};
+}
 const dataPath = () => resolve(process.env.RAIL_DATA_PATH || './data/drafts.json');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const now = () => new Date().toISOString();
@@ -104,6 +121,9 @@ export async function claimForQueue(id, reviewer) {
     const d = find(db, id);
     const stale = d.status === 'queuing' && Date.now() - Date.parse(d.queuingAt) > STALE_QUEUING_MS;
     if (d.status !== 'approved' && !stale) throw conflict(d.status === 'queued' ? 'Draft already queued' : 'Only approved drafts can be queued');
+    // Checked inside the transaction so concurrent sends can't overshoot the cap.
+    const week = weeklyUsage(db.drafts.filter(x => x.id !== id));
+    if (week.remaining <= 0) throw new HttpError(429, `Weekly posting cap reached (${week.used}/${week.cap})` + (week.nextSlotAt ? `; next slot frees at ${week.nextSlotAt}` : ''));
     Object.assign(d, {status: 'queuing', queuingAt: now(), updatedAt: now()});
     event(db, 'draft_queuing', id, {reviewer});
     return {...d};
@@ -143,5 +163,5 @@ export async function stats() {
   const {drafts} = await readDb(dataPath());
   const counts = Object.fromEntries(STATUSES.map(s => [s, 0]));
   for (const d of drafts) counts[d.status] = (counts[d.status] || 0) + 1;
-  return {counts, total: drafts.length};
+  return {counts, total: drafts.length, weekly: weeklyUsage(drafts)};
 }

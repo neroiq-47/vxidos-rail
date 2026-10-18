@@ -32,7 +32,7 @@ async function api(path, { method = 'GET', body } = {}) {
   let data = {};
   try { data = await res.json(); } catch {}
   if (res.status === 401) { signOut(); throw new Error('session expired — sign in again'); }
-  if (res.status === 429) throw new Error('slow down — rate limited, try again shortly');
+  if (res.status === 429) throw new Error(data.error || 'slow down — rate limited, try again shortly');
   if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
   return data;
 }
@@ -66,10 +66,12 @@ async function refresh() {
 }
 
 async function loadStats() {
-  const { counts = {}, total = 0 } = await api('/stats');
+  const { counts = {}, total = 0, weekly } = await api('/stats');
   $('stats').replaceChildren(
     ...Object.entries(STATUS_LABEL).map(([k, label]) => el('span', { class: 'chip', text: label }, el('b', { text: String(counts[k] ?? 0) }))),
-    el('span', { class: 'chip', text: 'total' }, el('b', { text: String(total) }))
+    el('span', { class: 'chip', text: 'total' }, el('b', { text: String(total) })),
+    weekly && el('span', { class: 'chip' + (weekly.remaining ? '' : ' full'), text: 'this week', title: weekly.nextSlotAt ? `next slot ${new Date(weekly.nextSlotAt).toLocaleString()}` : 'rolling 7 days' },
+      el('b', { text: `${weekly.used}/${weekly.cap}` }))
   );
 }
 
