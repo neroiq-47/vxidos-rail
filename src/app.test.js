@@ -109,3 +109,20 @@ test('behind a proxy, one client being locked out does not lock out others', asy
     assert.equal(await hit('7.7.7.7', secret), 200, 'owner unaffected');
   } finally { proxied.close(); }
 });
+
+test('TRUST_PROXY header mode reads the proxy-set header (Railway: x-real-ip)', async () => {
+  const {clientIp, parseTrustProxy} = await import('./app.js');
+  const req = h => ({socket: {remoteAddress: '10.0.0.1'}, headers: h});
+  const trust = parseTrustProxy('X-Real-IP');
+  assert.deepEqual(trust, {header: 'x-real-ip'});
+  assert.equal(clientIp(req({'x-real-ip': '3.3.3.3', 'x-forwarded-for': '6.6.6.6'}), trust), '3.3.3.3');
+  assert.equal(clientIp(req({}), trust), '10.0.0.1', 'falls back to socket');
+  assert.equal(parseTrustProxy('0'), null); assert.equal(parseTrustProxy(undefined), null);
+  assert.deepEqual(parseTrustProxy('2'), {hops: 2});
+  assert.throws(() => parseTrustProxy('x real ip'), /Invalid TRUST_PROXY/);
+});
+
+test('health reports whether generation is configured', async () => {
+  const h = await fetch(base + '/health').then(r => r.json());
+  assert.equal(typeof h.generation, 'boolean');
+});
