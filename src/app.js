@@ -59,14 +59,14 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
       if (!Number.isInteger(count) || count < 1 || count > 5) throw badRequest('count must be 1-5');
       for (let i = 0; i < count; i++) if (!drafting(ip)) throw new HttpError(429, 'Draft generation rate limit reached');
       if (generating.busy) throw new HttpError(409, 'Generation already in progress');
-      // Check the daily creation cap before spending LLM calls; generate only what still fits.
-      const {daily} = await store.stats();
-      if (daily.remaining <= 0) throw new HttpError(429, `Daily draft creation cap reached (${daily.used}/${daily.cap})` + (daily.nextSlotAt ? `; next slot frees at ${daily.nextSlotAt}` : ''));
-      const n = Math.min(count, daily.remaining);
+      // Check the creation caps (daily and weekly) before spending LLM calls; generate only what still fits.
+      const {creation} = await store.stats();
+      if (creation.remaining <= 0) throw store.creationCapError(creation);
+      const n = Math.min(count, creation.remaining);
       generating.busy = true;
       try {
         const out = await draftBatch(n, {pillar, generate, source: 'api'});
-        if (n < count) out.errors.push(`only ${n} of ${count} generated: daily cap is ${daily.cap}`);
+        if (n < count) out.errors.push(`only ${n} of ${count} generated: ${creation.window} draft cap is ${creation.cap}`);
         return [201, out];
       }
       finally { generating.busy = false; }

@@ -15,7 +15,11 @@ const capFromEnv = (name, fallback) => {
   return Number.isInteger(n) && n >= 0 ? n : fallback;
 };
 export const weeklyCap = () => capFromEnv('WEEKLY_POST_CAP', 200);
-export const dailyDraftCap = () => capFromEnv('DAILY_DRAFT_CAP', 50);
+// Generation is sized to what can actually be posted: by default no more drafts per week than the
+// weekly post cap, spread evenly per day. DAILY_DRAFT_CAP / WEEKLY_DRAFT_CAP override with a number.
+const derivedCap = (name, derived) => /^\d+$/.test(String(process.env[name] ?? '').trim()) ? Number(process.env[name]) : derived;
+export const weeklyDraftCap = () => derivedCap('WEEKLY_DRAFT_CAP', weeklyCap());
+export const dailyDraftCap = () => derivedCap('DAILY_DRAFT_CAP', Math.ceil(weeklyDraftCap() / 7));
 
 // Rolling-window usage; the slot that frees soonest is the oldest event still inside the window.
 function windowUsage(times, cap, windowMs, at = Date.now()) {
@@ -28,7 +32,15 @@ function windowUsage(times, cap, windowMs, at = Date.now()) {
 const weeklyUsage = drafts => windowUsage(drafts.flatMap(d =>
   d.status === 'queued' ? [Date.parse(d.queuedAt)] : d.status === 'queuing' ? [Date.parse(d.queuingAt)] : []), weeklyCap(), WEEK_MS);
 // Every draft created counts for 24 hours, whatever happened to it since (so rejecting doesn't refund).
-const dailyDraftUsage = drafts => windowUsage(drafts.map(d => Date.parse(d.createdAt)), dailyDraftCap(), DAY_MS);
+const createdTimes = drafts => drafts.map(d => Date.parse(d.createdAt));
+const dailyDraftUsage = drafts => windowUsage(createdTimes(drafts), dailyDraftCap(), DAY_MS);
+const weeklyDraftUsage = drafts => windowUsage(createdTimes(drafts), weeklyDraftCap(), WEEK_MS);
+// Whichever creation window is tighter decides how many drafts may be made right now.
+export function creationBudget(drafts) {
+  const day = dailyDraftUsage(drafts), week = weeklyDraftUsage(drafts);
+  return day.remaining <= week.remaining ? {...day, window: 'daily'} : {...week, window: 'weekly'};
+}
+export const creationCapError = b => capError(b.window === 'daily' ? 'Daily draft creation cap reached' : 'Weekly draft creation cap reached', b);
 const capError = (what, u) => new HttpError(429, `${what} (${u.used}/${u.cap})` + (u.nextSlotAt ? `; next slot frees at ${u.nextSlotAt}` : ''));
 const dataPath = () => resolve(process.env.RAIL_DATA_PATH || './data/drafts.json');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -83,8 +95,8 @@ const event = (db, type, id, extra = {}) => { const e = {type, id, at: now(), ..
 export async function saveDraft(text, meta = {}) {
   const clean = validateDraft(text), hash = hashText(clean);
   return transaction(db => {
-    const day = dailyDraftUsage(db.drafts);
-    if (day.remaining <= 0) throw capError('Daily draft creation cap reached', day);
+    const budget = creationBudget(db.drafts);
+    if (budget.remaining <= 0) throw creationCapError(budget);
     if (db.drafts.some(d => d.hash === hash)) throw conflict('Duplicate draft detected');
     const at = now();
     const entry = {id: randomUUID(), text: clean, hash, status: 'pending_approval', pillar: meta.pillar || null, source: meta.source || 'manual', createdAt: at, updatedAt: at};
@@ -171,5 +183,5 @@ export async function stats() {
   const {drafts} = await readDb(dataPath());
   const counts = Object.fromEntries(STATUSES.map(s => [s, 0]));
   for (const d of drafts) counts[d.status] = (counts[d.status] || 0) + 1;
-  return {counts, total: drafts.length, weekly: weeklyUsage(drafts), daily: dailyDraftUsage(drafts)};
+  return {counts, total: drafts.length, weekly: weeklyUsage(drafts), daily: dailyDraftUsage(drafts), weeklyDrafts: weeklyDraftUsage(drafts), creation: creationBudget(drafts)};
 }

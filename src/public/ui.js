@@ -67,14 +67,16 @@ async function refresh() {
 }
 
 async function loadStats() {
-  const { counts = {}, total = 0, weekly, daily } = await api('/stats');
+  const { counts = {}, total = 0, weekly, daily, weeklyDrafts } = await api('/stats');
   $('stats').replaceChildren(
     ...Object.entries(STATUS_LABEL).map(([k, label]) => el('span', { class: 'chip', text: label }, el('b', { text: String(counts[k] ?? 0) }))),
     el('span', { class: 'chip', text: 'total' }, el('b', { text: String(total) })),
     weekly && el('span', { class: 'chip' + (weekly.remaining ? '' : ' full'), text: 'this week', title: weekly.nextSlotAt ? `next slot ${new Date(weekly.nextSlotAt).toLocaleString()}` : 'rolling 7 days' },
       el('b', { text: `${weekly.used}/${weekly.cap}` })),
     daily && el('span', { class: 'chip' + (daily.remaining ? '' : ' full'), text: 'drafts today', title: daily.nextSlotAt ? `next slot ${new Date(daily.nextSlotAt).toLocaleString()}` : 'rolling 24 hours' },
-      el('b', { text: `${daily.used}/${daily.cap}` }))
+      el('b', { text: `${daily.used}/${daily.cap}` })),
+    weeklyDrafts && el('span', { class: 'chip' + (weeklyDrafts.remaining ? '' : ' full'), text: 'drafts this week', title: 'never more drafts per week than the weekly post cap' },
+      el('b', { text: `${weeklyDrafts.used}/${weeklyDrafts.cap}` }))
   );
 }
 
