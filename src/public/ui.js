@@ -1,3 +1,4 @@
+import { tweetLength, TWEET_MAX } from '/tweetlen.js';
 const $ = id => document.getElementById(id);
 const store = {
   get(k) { try { return sessionStorage.getItem(k) || ''; } catch { return ''; } },
@@ -37,7 +38,7 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
-const chars = s => [...s].length;
+const chars = s => tweetLength(s);
 function ago(iso) {
   const s = Math.round((Date.now() - new Date(iso)) / 1000);
   if (!Number.isFinite(s)) return '';
@@ -101,7 +102,7 @@ async function act(btn, fn, okMsg) {
 
 function countEl(text) {
   const n = chars(text);
-  return el('span', { class: 'count mono' + (n > 280 ? ' over' : ''), text: `${n}/280` });
+  return el('span', { class: 'count mono' + (n > TWEET_MAX ? ' over' : ''), text: `${n}/${TWEET_MAX}`, title: 'counted the way X counts: emoji and CJK count as 2' });
 }
 
 function card(d) {
@@ -141,9 +142,12 @@ function editMode(c, d) {
   const ta = el('textarea', { 'aria-label': 'edit draft text', maxlength: 600 });
   ta.value = d.text;
   const cnt = countEl(d.text);
-  ta.addEventListener('input', () => { const n = countEl(ta.value); c.querySelector('.edit-count').replaceChildren(n); });
   const save = el('button', { type: 'button', class: 'primary', onclick: e => act(e.currentTarget, () =>
     api(`/drafts/${encodeURIComponent(d.id)}`, { method: 'PATCH', body: { text: ta.value, editor: state.reviewer } }), 'saved') }, 'save');
+  ta.addEventListener('input', () => {
+    c.querySelector('.edit-count').replaceChildren(countEl(ta.value));
+    save.disabled = chars(ta.value.trim()) > TWEET_MAX;
+  });
   const cancel = el('button', { type: 'button', class: 'ghost', onclick: () => c.replaceWith(card(d)) }, 'cancel');
   c.replaceChildren(ta, el('div', { class: 'meta' }, el('span', { class: 'edit-count' }, cnt)), el('div', { class: 'actions' }, save, cancel));
   ta.focus();

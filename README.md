@@ -47,7 +47,7 @@ docker run -p 127.0.0.1:3000:3000 --env-file .env -v vxidos-data:/data vxidos-ra
 - **Generation with guardrails**:
   - Pillar rotation: midnight lifestyle, phantom identity, digital-building progress.
   - Recent posts are included in the prompt so it avoids repeats.
-  - Output that fails validation (links, unverifiable financial claims, mass mentions, hashtag spam, outside 12–280 Unicode characters) is retried up to 3 times.
+  - Output that fails validation (links, unverifiable financial claims, mass mentions, hashtag spam, shorter than 12 characters, or over **280 characters as X counts them**: emoji and CJK count as 2, text is NFC-normalised. The dashboard's live `n/280` counter uses the same code, `src/public/tweetlen.js`) is retried up to 3 times.
   - Near-duplicate blocking: case, punctuation and spacing are normalised before hashing.
 - **Audited store**: a transactional JSON file with an in-process queue, a cross-process lock file, recovery of stale locks after a crash, and an append-only event log (capped at 5,000 events).
 - **Buffer integration**, verified against the examples on developers.buffer.com:

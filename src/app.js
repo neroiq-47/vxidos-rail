@@ -10,7 +10,7 @@ import {logger} from './log.js';
 
 export const VERSION = '1.0.0';
 const PUBLIC = new URL('./public/', import.meta.url);
-const STATIC = {'/': ['index.html', 'text/html; charset=utf-8'], '/ui.js': ['ui.js', 'text/javascript; charset=utf-8'], '/ui.css': ['ui.css', 'text/css; charset=utf-8']};
+const STATIC = {'/': ['index.html', 'text/html; charset=utf-8'], '/ui.js': ['ui.js', 'text/javascript; charset=utf-8'], '/ui.css': ['ui.css', 'text/css; charset=utf-8'], '/tweetlen.js': ['tweetlen.js', 'text/javascript; charset=utf-8']};
 const SECURITY_HEADERS = {
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
   'Content-Security-Policy': "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"

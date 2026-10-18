@@ -1,5 +1,6 @@
 import {badRequest} from './errors.js';
-export const MAX_CHARS = 280;
+import {tweetLength, TWEET_MAX} from './public/tweetlen.js';
+export const MAX_CHARS = TWEET_MAX;
 export const MIN_CHARS = 12;
 const QUOTES = /^["'“”‘’`]+|["'“”‘’`]+$/g;
 // LLMs often wrap the post in quotes or prefix it; strip that before validating.
@@ -9,8 +10,9 @@ export function cleanDraft(text) {
 }
 export function validateDraft(text) {
   const t = cleanDraft(text);
-  const len = [...t].length;
-  if (len < MIN_CHARS || len > MAX_CHARS) throw badRequest(`Draft must be ${MIN_CHARS}-${MAX_CHARS} characters`);
+  if ([...t].length < MIN_CHARS) throw badRequest(`Draft must be at least ${MIN_CHARS} characters`);
+  const len = tweetLength(t);
+  if (len > MAX_CHARS) throw badRequest(`Draft is ${len}/${MAX_CHARS} characters as X counts them (emoji count as 2)`);
   if (/https?:\/\/|www\.\S+/i.test(t)) throw badRequest('Unapproved links are not permitted');
   if (/(guaranteed (returns|profit|income)|risk.free profit|\$\d{1,3}(,\d{3}){1,}\+? (earned|made|profit)|\$\d{6,} earned|\d+x your money)/i.test(t)) throw badRequest('Unverifiable financial claim');
   if (/[@#]everyone\b/i.test(t)) throw badRequest('Mass-mention text prohibited');
