@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {HttpError, badRequest, notFound} from './errors.js';
 import {draftBatch} from './rail.js';
 import * as buffer from './buffer.js';
+import {SEND_MODES, checkDueAt} from './buffer.js';
 import * as store from './store.js';
 import {isId} from './validate.js';
 import {logger} from './log.js';
@@ -58,8 +59,16 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
       if (!Number.isInteger(count) || count < 1 || count > 5) throw badRequest('count must be 1-5');
       for (let i = 0; i < count; i++) if (!drafting(ip)) throw new HttpError(429, 'Draft generation rate limit reached');
       if (generating.busy) throw new HttpError(409, 'Generation already in progress');
+      // Check the daily creation cap before spending LLM calls; generate only what still fits.
+      const {daily} = await store.stats();
+      if (daily.remaining <= 0) throw new HttpError(429, `Daily draft creation cap reached (${daily.used}/${daily.cap})` + (daily.nextSlotAt ? `; next slot frees at ${daily.nextSlotAt}` : ''));
+      const n = Math.min(count, daily.remaining);
       generating.busy = true;
-      try { return [201, await draftBatch(count, {pillar, generate, source: 'api'})]; }
+      try {
+        const out = await draftBatch(n, {pillar, generate, source: 'api'});
+        if (n < count) out.errors.push(`only ${n} of ${count} generated: daily cap is ${daily.cap}`);
+        return [201, out];
+      }
       finally { generating.busy = false; }
     }],
     ['PATCH', /^\/drafts\/([^/]+)$/, async (req, [, id]) => {
@@ -71,13 +80,16 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
       return [200, await store.reviewDraft(checkId(id), decision, reviewer, note)];
     }],
     ['POST', /^\/drafts\/([^/]+)\/queue$/, async (req, [, id]) => {
-      const {reviewer} = await readJson(req);
+      const {reviewer, mode = 'draft', dueAt} = await readJson(req);
+      if (!SEND_MODES.includes(mode)) throw badRequest(`mode must be one of ${SEND_MODES.join(', ')}`);
+      let due;
+      if (mode === 'schedule') { try { due = checkDueAt(dueAt); } catch (e) { throw badRequest(e.message); } }
       if (!bufferApi.writesEnabled()) throw new HttpError(409, 'Buffer writes are disabled');
       const d = await store.claimForQueue(checkId(id), reviewer);
       let post;
-      try { post = await bufferApi.createBufferDraft(d.text); }
+      try { post = await bufferApi.createBufferPost(d.text, {mode, dueAt: due}); }
       catch (e) { await store.failQueue(d.id, e.message); throw new HttpError(502, e.message); }
-      return [200, await store.finishQueue(d.id, post.id, reviewer)];
+      return [200, await store.finishQueue(d.id, post.id, reviewer, {sendMode: mode, dueAt: post.dueAt || due || null})];
     }],
     ['GET', /^\/buffer\/check$/, async () => [200, await wrapUpstream(() => bufferApi.verifyBufferConnection())]],
     ['GET', /^\/buffer\/channels$/, async () => [200, await wrapUpstream(() => bufferApi.listChannels())]]

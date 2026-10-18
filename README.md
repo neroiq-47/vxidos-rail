@@ -60,6 +60,13 @@ docker run -p 127.0.0.1:3000:3000 --env-file .env -v vxidos-data:/data vxidos-ra
   - Per-IP request and generation rate limits.
   - 8 KB body cap and security headers.
   - Binds to localhost by default.
+- **Daily draft cap**: at most `DAILY_DRAFT_CAP` drafts (default **50**) can be created in any rolling 24 hours. This covers the dashboard, the API, the CLI and autopilot. It's checked before any LLM call, so a capped request costs nothing. A batch that would go over is cut down to fit and says so. Rejected drafts still count.
+- **Scheduling**: when sending an approved post you choose how it goes to Buffer:
+  - **as Buffer draft** (the default): nothing publishes until you schedule it inside Buffer.
+  - **next Buffer slot**: joins your Buffer posting schedule.
+  - **schedule at…**: you pick a date and time in your local timezone; it's sent to Buffer as UTC and must be at least a minute ahead and within a year.
+
+  Queued and scheduled posts **publish automatically**. The publish time Buffer reports is shown on the card.
 - **Weekly posting cap**: at most `WEEKLY_POST_CAP` posts (default **200**) can be sent to Buffer in any rolling 7 days. It's enforced inside the store transaction, so concurrent sends can't go over. Past the cap, sending returns `429` with the time the next slot frees up. The dashboard shows `this week used/cap`.
 - **Autopilot (optional)**: `DRAFT_INTERVAL_MINUTES` creates a pending draft on a timer and stops at `MAX_PENDING_DRAFTS`. It still needs human approval.
 - CI on GitHub Actions (Node 20 and 22) and a Dockerfile that runs as a non-root user.
@@ -78,13 +85,13 @@ All endpoints except `/`, `/ui.*` and `/health` need `Authorization: Bearer $RAI
 | Method | Path | Body / query | Notes |
 |---|---|---|---|
 | GET | `/health` | | `{ok, version, bufferWrites}` |
-| GET | `/stats` | | counts per status, plus `weekly {cap, used, remaining, nextSlotAt}` |
+| GET | `/stats` | | counts per status, plus `weekly` (sends) and `daily` (drafts created), each `{cap, used, remaining, nextSlotAt}` |
 | GET | `/drafts` | `?status=pending_approval\|approved\|rejected\|queuing\|queued` | newest first |
 | GET | `/drafts/:id` | | |
 | POST | `/draft` | `{count?: 1-5, pillar?}` | calls the LLM (costs money); `201 {drafts, errors}` |
 | PATCH | `/drafts/:id` | `{text, editor}` | pending only; logs the previous text |
 | POST | `/drafts/:id/review` | `{decision: "approved"\|"rejected", reviewer, note?}` | |
-| POST | `/drafts/:id/queue` | `{reviewer}` | approved only; needs Buffer writes enabled; `429` once the weekly cap is reached |
+| POST | `/drafts/:id/queue` | `{reviewer, mode?: "draft"\|"queue"\|"schedule", dueAt?}` (`dueAt` = ISO time, required for `schedule`) | approved only; needs Buffer writes enabled; `429` once the weekly cap is reached |
 | GET | `/events` | `?limit=50` | audit log, newest first |
 | GET | `/buffer/check`, `/buffer/channels` | | read-only |
 

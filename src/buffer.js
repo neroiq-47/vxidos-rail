@@ -30,20 +30,37 @@ export async function listChannels(organizationId = process.env.BUFFER_ORGANIZAT
   return {organizationId, channels: data.channels || []};
 }
 
-// Creates a Buffer *draft* only (saveToDraft: true) — nothing publishes until scheduled inside Buffer.
+export const SEND_MODES = ['draft', 'queue', 'schedule'];
+const MAX_SCHEDULE_AHEAD_MS = 366 * 24 * 3600_000;
+export function checkDueAt(dueAt, at = Date.now()) {
+  const t = Date.parse(dueAt);
+  if (typeof dueAt !== 'string' || Number.isNaN(t)) throw new Error('dueAt must be an ISO 8601 date-time');
+  if (t < at + 60_000) throw new Error('dueAt must be at least a minute in the future');
+  if (t > at + MAX_SCHEDULE_AHEAD_MS) throw new Error('dueAt must be within a year');
+  return new Date(t).toISOString();
+}
+
+// mode 'draft': Buffer draft (nothing publishes until scheduled inside Buffer).
+// mode 'queue': next free slot in the channel's Buffer posting schedule.
+// mode 'schedule': publishes at dueAt (UTC). Field names follow developers.buffer.com "Posts & Scheduling".
 // Text is embedded as a JSON-escaped string literal, which is a valid GraphQL string.
-export async function createBufferDraft(text, {channelId = process.env.BUFFER_CHANNEL_ID, fetchImpl} = {}) {
+export async function createBufferPost(text, {mode = 'draft', dueAt, channelId = process.env.BUFFER_CHANNEL_ID, fetchImpl} = {}) {
   if (process.env.BUFFER_WRITES_ENABLED !== 'true') throw new Error('Buffer writes disabled (set BUFFER_WRITES_ENABLED=true)');
-  const data = await bufferGraphql(`mutation CreateDraftPost {
-  createPost(input: { text: ${JSON.stringify(text)}, channelId: ${gqlId(channelId)}, schedulingType: automatic, mode: addToQueue, saveToDraft: true }) {
-    ... on PostActionSuccess { post { id text } }
+  if (!SEND_MODES.includes(mode)) throw new Error(`mode must be one of ${SEND_MODES.join(', ')}`);
+  const fields = mode === 'draft' ? 'mode: addToQueue, saveToDraft: true'
+    : mode === 'queue' ? 'mode: addToQueue'
+    : `mode: customScheduled, dueAt: ${JSON.stringify(checkDueAt(dueAt))}`;
+  const data = await bufferGraphql(`mutation CreatePost {
+  createPost(input: { text: ${JSON.stringify(text)}, channelId: ${gqlId(channelId)}, schedulingType: automatic, ${fields} }) {
+    ... on PostActionSuccess { post { id text dueAt } }
     ... on MutationError { message }
   }
 }`, {}, fetchImpl);
   const r = data.createPost;
-  if (!r?.post?.id) throw new Error(`Buffer rejected draft: ${r?.message || 'unknown error'}`);
+  if (!r?.post?.id) throw new Error(`Buffer rejected post: ${r?.message || 'unknown error'}`);
   return r.post;
 }
+export const createBufferDraft = (text, opts = {}) => createBufferPost(text, {...opts, mode: 'draft'});
 
 // Read-only startup check: reports available channels and whether BUFFER_CHANNEL_ID matches one of them.
 export async function checkBufferSetup(fetchImpl) {

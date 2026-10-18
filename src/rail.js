@@ -50,8 +50,8 @@ export async function draftOnce({pillar, generate = generateDraft, attempts = 3,
       const text = validateDraft(raw);
       return await saveDraft(text, {pillar, source});
     } catch (e) {
-      // Only retry content problems (validation/duplicate); auth/network errors fail fast.
-      if (!e.status || e.status >= 500) throw e;
+      // Only retry content problems (validation/duplicate); auth/network errors and caps (429) fail fast.
+      if (!e.status || e.status >= 500 || e.status === 429) throw e;
       lastError = e;
     }
   }
@@ -63,7 +63,10 @@ export async function draftBatch(count = 1, opts = {}) {
   const drafts = [], errors = [];
   for (let i = 0; i < count; i++) {
     try { drafts.push(await draftOnce(opts)); }
-    catch (e) { if (!e.status || e.status >= 500) { if (!drafts.length) throw e; errors.push(e.message); break; } errors.push(e.message); }
+    catch (e) {
+      if (!e.status || e.status >= 500 || e.status === 429) { if (!drafts.length) throw e; errors.push(e.message); break; }
+      errors.push(e.message);
+    }
   }
   return {drafts, errors};
 }
