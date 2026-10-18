@@ -45,6 +45,7 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
   const general = rateLimiter(Number(env.RATE_LIMIT_PER_MIN || 120), 60_000);
   const drafting = rateLimiter(Number(env.DRAFT_LIMIT_PER_HOUR || 30), 3600_000);
   const generating = {busy: false};
+  const trustHops = Math.max(0, Number(env.TRUST_PROXY) || 0);
 
   const routes = [
     ['GET', /^\/stats$/, async () => [200, await store.stats()]],
@@ -88,7 +89,7 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
       res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
     };
     const url = new URL(req.url || '/', 'http://localhost');
-    const ip = req.socket.remoteAddress || 'unknown';
+    const ip = clientIp(req, trustHops);
     try {
       if (req.method === 'GET' && STATIC[url.pathname]) {
         const [file, type] = STATIC[url.pathname];
@@ -110,6 +111,15 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
       return send(status, {error: status === 500 ? 'Internal error' : e.message});
     }
   });
+}
+
+// Behind a reverse proxy (Railway, Fly, nginx) every socket is the proxy. With TRUST_PROXY=N, take the
+// address N hops from the right of X-Forwarded-For: entries further left are client-supplied and spoofable.
+export function clientIp(req, hops = 0) {
+  const socketIp = req.socket.remoteAddress || 'unknown';
+  if (!hops) return socketIp;
+  const chain = String(req.headers['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean);
+  return chain[chain.length - hops] || socketIp;
 }
 
 function checkId(id) { if (!isId(id)) throw notFound('Draft not found'); return id; }

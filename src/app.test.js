@@ -88,3 +88,24 @@ test('auth: wrong token is 401, then locked out even with right token', async ()
   assert.equal((await api('GET', '/drafts', null, 'wrong')).status, 429);
   assert.equal((await api('GET', '/drafts')).status, 429);
 });
+
+test('clientIp honours TRUST_PROXY hops and ignores spoofed left entries', async () => {
+  const {clientIp} = await import('./app.js');
+  const req = xff => ({socket: {remoteAddress: '10.0.0.1'}, headers: xff ? {'x-forwarded-for': xff} : {}});
+  assert.equal(clientIp(req('1.1.1.1')), '10.0.0.1', 'off by default');
+  assert.equal(clientIp(req('6.6.6.6, 2.2.2.2'), 1), '2.2.2.2', 'rightmost entry is the one the proxy added');
+  assert.equal(clientIp(req(''), 1), '10.0.0.1', 'falls back to socket');
+});
+
+test('behind a proxy, one client being locked out does not lock out others', async () => {
+  const proxied = createApp({secret, generate: async () => 'x', bufferApi: fakeBuffer, env: {AUTH_FAIL_LIMIT: '2', TRUST_PROXY: '1'}});
+  await new Promise(r => proxied.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${proxied.address().port}/stats`;
+  const hit = (ip, token) => fetch(url, {headers: {authorization: `Bearer ${token}`, 'x-forwarded-for': ip}}).then(r => r.status);
+  try {
+    assert.equal(await hit('6.6.6.6', 'bad'), 401);
+    assert.equal(await hit('6.6.6.6', 'bad'), 401);
+    assert.equal(await hit('6.6.6.6', secret), 429, 'attacker locked out');
+    assert.equal(await hit('7.7.7.7', secret), 200, 'owner unaffected');
+  } finally { proxied.close(); }
+});
