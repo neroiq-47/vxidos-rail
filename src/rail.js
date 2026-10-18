@@ -16,7 +16,7 @@ export function buildMessages(pillar, recent = []) {
   const avoid = recent.length ? ` Do not repeat or closely paraphrase these recent posts:\n${recent.map(t => `- ${t}`).join('\n')}` : '';
   return [
     {role: 'system', content: `You write for ${BRAND.name} (${BRAND.handle}). Brand voice: ${BRAND.voice}. Rules: ${BRAND.rules.join(' ')} Output exactly one post, no quotes or commentary.`},
-    {role: 'user', content: `Write one original, authentic post. Theme: ${pillar}. Do not invent achievements.${avoid}`}
+    {role: 'user', content: `Write one original, authentic post. Theme: ${pillar}${BRAND.pillarGuides[pillar] ? ` (${BRAND.pillarGuides[pillar]})` : ''}. Do not invent achievements.${avoid}`}
   ];
 }
 
