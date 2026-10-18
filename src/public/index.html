@@ -34,79 +34,116 @@
     </form>
   </section>
 
-  <main id="app" hidden>
-    <div class="stats" id="stats" aria-label="draft counts"></div>
-
-    <section class="panel gen" aria-label="generate drafts">
-      <label>count
-        <select id="gen-count">
-          <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option>
-        </select>
-      </label>
-      <label>pillar
-        <select id="gen-pillar">
-          <option value="">any</option>
-          <option>midnight lifestyle</option>
-          <option>phantom identity</option>
-          <option>digital-building progress</option>
-          <option>dark web3</option>
-          <option>privacy protocols</option>
-        </select>
-      </label>
-      <button type="button" class="primary" id="gen-btn">generate</button>
-    </section>
-
-    <section class="panel auto" aria-labelledby="auto-h">
-      <h2 id="auto-h" class="panel-h">auto-schedule</h2>
-      <fieldset class="pillars" id="auto-pillars">
-        <legend>pillars</legend>
-      </fieldset>
-      <div class="auto-row">
-        <label>posts
-          <select id="auto-count"></select>
-        </label>
-        <label>per day
-          <select id="auto-perday"></select>
-        </label>
-        <label>from
-          <input type="time" id="auto-from" value="09:00">
-        </label>
-        <label>to
-          <input type="time" id="auto-to" value="23:00">
-        </label>
-        <label>starting
-          <input type="date" id="auto-start">
-        </label>
-        <label class="check"><input type="checkbox" id="auto-jitter" checked> ±10 min variation</label>
-      </div>
-      <p class="hint" id="auto-plan" aria-live="polite"></p>
-      <div class="actions">
-        <button type="button" id="auto-preview">preview</button>
-        <button type="button" class="primary" id="auto-btn">schedule 100</button>
-        <span class="hint" id="auto-hint">approved drafts only, oldest first, alternating pillars. scheduled posts publish automatically.</span>
-      </div>
-      <div class="job" id="auto-job" hidden>
-        <progress id="auto-progress" max="100" value="0"></progress>
-        <span class="mono" id="auto-status"></span>
-        <button type="button" class="ghost" id="auto-cancel">cancel</button>
-        <button type="button" class="bad" id="auto-undo" hidden>unschedule this batch</button>
-      </div>
-    </section>
-
-    <nav class="tabs" role="tablist" aria-label="filter drafts">
-      <button type="button" role="tab" data-status="pending_approval" aria-selected="true">pending</button>
-      <button type="button" role="tab" data-status="approved" aria-selected="false">approved</button>
-      <button type="button" role="tab" data-status="queued" aria-selected="false">queued</button>
-      <button type="button" role="tab" data-status="rejected" aria-selected="false">rejected</button>
-      <button type="button" role="tab" data-status="" aria-selected="false">all</button>
+  <main id="app" class="app" hidden>
+    <nav class="sections" id="sections" aria-label="sections">
+      <a href="#overview" data-view="overview">overview</a>
+      <a href="#create" data-view="create">create</a>
+      <a href="#review" data-view="review">review <span class="n" data-count="review"></span></a>
+      <a href="#ready" data-view="ready">ready <span class="n" data-count="ready"></span></a>
+      <a href="#auto" data-view="auto">auto-schedule</a>
+      <a href="#scheduled" data-view="scheduled">scheduled <span class="n" data-count="scheduled"></span></a>
+      <a href="#archive" data-view="archive">archive</a>
+      <a href="#activity" data-view="activity">activity</a>
     </nav>
 
-    <section id="drafts" class="drafts" aria-live="polite" aria-busy="false"></section>
+    <div class="views">
+      <section class="view" id="view-overview" data-view="overview" aria-labelledby="overview-h" hidden>
+        <header class="view-h"><h2 id="overview-h">overview</h2><p class="lead">where everything stands. tap a box to jump to it.</p></header>
+        <div class="stats" id="stats" aria-label="draft counts"></div>
+        <div class="tiles" id="tiles"></div>
+      </section>
 
-    <details class="panel activity" id="activity">
-      <summary>activity</summary>
-      <ol id="events" class="events"></ol>
-    </details>
+      <section class="view" id="view-create" data-view="create" aria-labelledby="create-h" hidden>
+        <header class="view-h"><h2 id="create-h">create</h2><p class="lead">write new drafts with the AI. they land in <a href="#review">review</a> for you to check.</p></header>
+        <div class="panel gen">
+          <label>count
+            <select id="gen-count">
+              <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option>
+            </select>
+          </label>
+          <label>pillar
+            <select id="gen-pillar">
+              <option value="">any</option>
+              <option>midnight lifestyle</option>
+              <option>phantom identity</option>
+              <option>digital-building progress</option>
+              <option>dark web3</option>
+              <option>privacy protocols</option>
+            </select>
+          </label>
+          <button type="button" class="primary" id="gen-btn">generate</button>
+        </div>
+        <p class="hint" id="gen-budget"></p>
+      </section>
+
+      <section class="view" id="view-review" data-view="review" aria-labelledby="review-h" hidden>
+        <header class="view-h"><h2 id="review-h">review</h2><p class="lead">new drafts waiting on you. approve, edit or reject each one. approved drafts move to <a href="#ready">ready</a>.</p></header>
+        <div class="drafts" data-list="review" aria-live="polite" aria-busy="false"></div>
+      </section>
+
+      <section class="view" id="view-ready" data-view="ready" aria-labelledby="ready-h" hidden>
+        <header class="view-h"><h2 id="ready-h">ready</h2><p class="lead">approved drafts. send one at a time here, or schedule many at once with <a href="#auto">auto-schedule</a>.</p></header>
+        <div class="drafts" data-list="ready" aria-live="polite" aria-busy="false"></div>
+      </section>
+
+      <section class="view auto" id="view-auto" data-view="auto" aria-labelledby="auto-h" hidden>
+        <header class="view-h"><h2 id="auto-h">auto-schedule</h2><p class="lead">spread approved drafts over the coming days. preview first, then confirm. scheduled posts publish on their own.</p></header>
+        <div class="panel">
+          <fieldset class="pillars" id="auto-pillars">
+            <legend>pillars</legend>
+          </fieldset>
+          <div class="auto-row">
+            <label>posts
+              <select id="auto-count"></select>
+            </label>
+            <label>per day
+              <select id="auto-perday"></select>
+            </label>
+            <label>from
+              <input type="time" id="auto-from" value="09:00">
+            </label>
+            <label>to
+              <input type="time" id="auto-to" value="23:00">
+            </label>
+            <label>starting
+              <input type="date" id="auto-start">
+            </label>
+            <label class="check"><input type="checkbox" id="auto-jitter" checked> ±10 min variation</label>
+          </div>
+          <p class="hint" id="auto-plan" aria-live="polite"></p>
+          <div class="actions">
+            <button type="button" id="auto-preview">preview</button>
+            <button type="button" class="primary" id="auto-btn">schedule 100</button>
+            <span class="hint" id="auto-hint">approved drafts only, oldest first, alternating pillars.</span>
+          </div>
+          <div class="job" id="auto-job" hidden>
+            <progress id="auto-progress" max="100" value="0"></progress>
+            <span class="mono" id="auto-status"></span>
+            <button type="button" class="ghost" id="auto-cancel">cancel</button>
+            <button type="button" class="bad" id="auto-undo" hidden>unschedule this batch</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-scheduled" data-view="scheduled" aria-labelledby="scheduled-h" hidden>
+        <header class="view-h"><h2 id="scheduled-h">scheduled</h2><p class="lead">posts sent to buffer. unschedule any that haven't published yet to move them back to <a href="#ready">ready</a>.</p></header>
+        <div class="drafts" data-list="scheduled" aria-live="polite" aria-busy="false"></div>
+      </section>
+
+      <section class="view" id="view-archive" data-view="archive" aria-labelledby="archive-h" hidden>
+        <header class="view-h"><h2 id="archive-h">archive</h2><p class="lead">rejected drafts, or everything ever made.</p></header>
+        <nav class="tabs" role="tablist" aria-label="filter archive">
+          <button type="button" role="tab" data-status="rejected" aria-selected="true">rejected</button>
+          <button type="button" role="tab" data-status="" aria-selected="false">all</button>
+        </nav>
+        <div class="drafts" data-list="archive" aria-live="polite" aria-busy="false"></div>
+      </section>
+
+      <section class="view" id="view-activity" data-view="activity" aria-labelledby="activity-h" hidden>
+        <header class="view-h"><h2 id="activity-h">activity</h2><p class="lead">the last 50 things that happened, newest first.</p></header>
+        <div class="panel"><ol id="events" class="events"></ol></div>
+      </section>
+    </div>
   </main>
 
   <footer class="foot mono dim" id="foot"></footer>
