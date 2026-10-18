@@ -56,6 +56,31 @@
       <button type="button" class="primary" id="gen-btn">generate</button>
     </section>
 
+    <section class="panel auto" aria-labelledby="auto-h">
+      <h2 id="auto-h" class="panel-h">auto-schedule</h2>
+      <fieldset class="pillars" id="auto-pillars">
+        <legend>pillars</legend>
+      </fieldset>
+      <div class="auto-row">
+        <label>posts
+          <select id="auto-count"></select>
+        </label>
+        <label>start
+          <input type="datetime-local" id="auto-start">
+        </label>
+        <label>every
+          <select id="auto-every">
+            <option value="60">1 h</option><option value="120">2 h</option><option value="180" selected>3 h</option>
+            <option value="240">4 h</option><option value="360">6 h</option><option value="720">12 h</option><option value="1440">24 h</option>
+          </select>
+        </label>
+      </div>
+      <div class="actions">
+        <button type="button" class="primary" id="auto-btn">auto-schedule 10</button>
+        <span class="hint" id="auto-hint">uses approved drafts, oldest first, alternating pillars. scheduled posts publish automatically.</span>
+      </div>
+    </section>
+
     <nav class="tabs" role="tablist" aria-label="filter drafts">
       <button type="button" role="tab" data-status="pending_approval" aria-selected="true">pending</button>
       <button type="button" role="tab" data-status="approved" aria-selected="false">approved</button>

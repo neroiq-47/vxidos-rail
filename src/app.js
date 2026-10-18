@@ -8,6 +8,7 @@ import {SEND_MODES, checkDueAt} from './buffer.js';
 import * as store from './store.js';
 import {isId} from './validate.js';
 import {logger} from './log.js';
+import {pickForSchedule, parseBatch} from './schedule.js';
 import {providersFromEnv} from './llm.js';
 
 export const VERSION = '1.0.0';
@@ -47,7 +48,15 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
   const authFail = rateLimiter(Number(env.AUTH_FAIL_LIMIT || 10), 15 * 60_000);
   const general = rateLimiter(Number(env.RATE_LIMIT_PER_MIN || 120), 60_000);
   const drafting = rateLimiter(Number(env.DRAFT_LIMIT_PER_HOUR || 30), 3600_000);
-  const generating = {busy: false};
+  const generating = {busy: false}, scheduling = {busy: false};
+  // claim → Buffer → finish; a Buffer failure returns the draft to approved with the error recorded.
+  async function sendOne(id, reviewer, mode, due) {
+    const d = await store.claimForQueue(id, reviewer, {plannedAt: due ? Date.parse(due) : Date.now()});
+    let post;
+    try { post = await bufferApi.createBufferPost(d.text, {mode, dueAt: due}); }
+    catch (e) { await store.failQueue(d.id, e.message); throw new HttpError(502, e.message); }
+    return store.finishQueue(d.id, post.id, reviewer, {sendMode: mode, dueAt: post.dueAt || due || null});
+  }
   const trust = parseTrustProxy(env.TRUST_PROXY);
   const providers = providersFromEnv(env);
 
@@ -87,11 +96,32 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
       let due;
       if (mode === 'schedule') { try { due = checkDueAt(dueAt); } catch (e) { throw badRequest(e.message); } }
       if (!bufferApi.writesEnabled()) throw new HttpError(409, 'Buffer writes are disabled');
-      const d = await store.claimForQueue(checkId(id), reviewer, {plannedAt: due ? Date.parse(due) : Date.now()});
-      let post;
-      try { post = await bufferApi.createBufferPost(d.text, {mode, dueAt: due}); }
-      catch (e) { await store.failQueue(d.id, e.message); throw new HttpError(502, e.message); }
-      return [200, await store.finishQueue(d.id, post.id, reviewer, {sendMode: mode, dueAt: post.dueAt || due || null})];
+      return [200, await sendOne(checkId(id), reviewer, mode, due)];
+    }],
+    // Auto-schedule up to 10 approved drafts from the chosen pillars, spaced intervalMinutes apart from startAt.
+    ['POST', /^\/schedule-batch$/, async req => {
+      const body = await readJson(req);
+      const {count, pillars, start, intervalMs} = parseBatch(body);
+      if (!bufferApi.writesEnabled()) throw new HttpError(409, 'Buffer writes are disabled');
+      if (scheduling.busy) throw new HttpError(409, 'A batch is already being scheduled');
+      scheduling.busy = true;
+      try {
+        const picked = pickForSchedule(await store.listDrafts({status: 'approved'}), pillars, count);
+        if (!picked.length) throw new HttpError(409, 'No approved drafts in the selected pillars');
+        const scheduled = [], errors = [];
+        for (const [i, d] of picked.entries()) {
+          let due;
+          try { due = checkDueAt(new Date(start + i * intervalMs).toISOString()); }
+          catch (e) { errors.push(`${d.id}: ${e.message}`); break; }
+          try { const r = await sendOne(d.id, body.reviewer, 'schedule', due); scheduled.push({id: r.id, pillar: r.pillar, dueAt: r.dueAt, text: r.text}); }
+          catch (e) {
+            errors.push(e.message);
+            if (e.status === 429 || e.status === 400) break; // cap reached or bad reviewer: later ones would fail too
+          }
+        }
+        if (picked.length < count) errors.push(`only ${picked.length} approved draft${picked.length === 1 ? '' : 's'} in the selected pillars`);
+        return [200, {scheduled, errors}];
+      } finally { scheduling.busy = false; }
     }],
     ['GET', /^\/buffer\/check$/, async () => [200, await wrapUpstream(() => bufferApi.verifyBufferConnection())]],
     ['GET', /^\/buffer\/channels$/, async () => [200, await wrapUpstream(() => bufferApi.listChannels())]]

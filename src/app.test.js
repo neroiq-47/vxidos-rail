@@ -19,7 +19,7 @@ const fakeBuffer = {
   verifyBufferConnection: async () => ({organizations: [{id: 'org1'}]}),
   listChannels: async () => ({channels: []})
 };
-const server = createApp({secret, generate: async () => posts[n++ % posts.length], bufferApi: fakeBuffer, env: {AUTH_FAIL_LIMIT: '3'}});
+const server = createApp({secret, generate: async () => { const i = n++; return i < posts.length ? posts[i] : `${posts[i % posts.length]} ${i}`; }, bufferApi: fakeBuffer, env: {AUTH_FAIL_LIMIT: '3'}});
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 test.after(() => server.close());
@@ -116,6 +116,31 @@ test('daily draft creation cap: generation stops at the cap and says when a slot
     const blocked = await api('POST', '/draft', {});
     assert.equal(blocked.status, 429); assert.match(blocked.body.error, /Daily draft creation cap reached .*next slot frees at/);
   } finally { delete process.env.DAILY_DRAFT_CAP; }
+});
+
+test('schedule-batch: schedules approved drafts from chosen pillars, spaced out, through Buffer', async () => {
+  // Approve three fresh drafts with known pillars.
+  const ids = [];
+  for (const [t, p] of [['batch one in the dark.', 'dark web3'], ['batch two, shielded.', 'privacy protocols'], ['batch three in the dark.', 'dark web3']]) {
+    const {body: {drafts: [x]}} = await api('POST', '/draft', {pillar: p});
+    await api('PATCH', `/drafts/${x.id}`, {text: t, editor: 'owner'});
+    await api('POST', `/drafts/${x.id}/review`, {decision: 'approved', reviewer: 'owner'});
+    ids.push(x.id);
+  }
+  const before = bufferCalls.length;
+  const startAt = new Date(Date.now() + 2 * 3600_000).toISOString();
+  assert.equal((await api('POST', '/schedule-batch', {reviewer: 'owner', pillars: ['nope'], startAt})).status, 400);
+  const r = await api('POST', '/schedule-batch', {reviewer: 'owner', count: 10, pillars: ['dark web3', 'privacy protocols'], startAt, intervalMinutes: 60});
+  assert.equal(r.status, 200);
+  const mine = r.body.scheduled.filter(x => ids.includes(x.id));
+  assert.equal(mine.length, 3);
+  const calls = bufferCalls.slice(before);
+  assert.ok(calls.every(c => c.mode === 'schedule'));
+  const dues = r.body.scheduled.map(x => Date.parse(x.dueAt));
+  for (let i = 1; i < dues.length; i++) assert.equal(dues[i] - dues[i - 1], 3600_000, 'spaced one hour apart');
+  assert.equal(dues[0], Date.parse(startAt));
+  assert.match(r.body.errors.join(' '), /only \d+ approved/);
+  assert.equal((await api('POST', '/schedule-batch', {reviewer: 'owner', pillars: ['dark web3'], startAt})).status, 409, 'nothing left to schedule');
 });
 
 test('auth: wrong token is 401, then locked out even with right token', async () => {
