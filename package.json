@@ -1,0 +1,1 @@
+{"name":"vxidos-rail","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node src/server.js","draft":"node src/rail.js","test":"node --test"},"dependencies":{"dotenv":"^16.4.5","openai":"^4.85.0"},"engines":{"node":">=20"}}
