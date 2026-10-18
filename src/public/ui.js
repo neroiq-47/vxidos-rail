@@ -5,7 +5,11 @@ const store = {
   get(k) { try { return sessionStorage.getItem(k) || ''; } catch { return ''; } },
   set(k, v) { try { v ? sessionStorage.setItem(k, v) : sessionStorage.removeItem(k); } catch {} }
 };
-const state = { token: store.get('rail.token'), reviewer: store.get('rail.reviewer'), status: 'pending_approval', bufferWrites: false };
+const state = { token: store.get('rail.token'), reviewer: store.get('rail.reviewer'), view: 'overview', archive: 'rejected', bufferWrites: false };
+// Each section of the page is its own view; the ones holding drafts show a single status.
+const VIEWS = ['overview', 'create', 'review', 'ready', 'auto', 'scheduled', 'archive', 'activity'];
+const LIST_STATUS = { review: () => 'pending_approval', ready: () => 'approved', scheduled: () => 'queued', archive: () => state.archive };
+const EMPTY = { review: 'nothing to review. make some in create.', ready: 'nothing approved yet.', scheduled: 'nothing scheduled.', archive: 'nothing here.' };
 const STATUS_LABEL = { pending_approval: 'pending', approved: 'approved', rejected: 'rejected', queuing: 'queuing', queued: 'queued' };
 const REVIEWER_RE = /^[a-zA-Z0-9_-]{2,64}$/;
 
@@ -67,8 +71,31 @@ async function refresh() {
   await Promise.all([loadStats(), loadDrafts(), loadEvents()].map(p => p.catch(e => toast(e.message, true))));
 }
 
+function showView(name) {
+  state.view = VIEWS.includes(name) ? name : 'overview';
+  document.querySelectorAll('.view').forEach(v => { v.hidden = v.dataset.view !== state.view; });
+  document.querySelectorAll('.sections a').forEach(a => {
+    if (a.dataset.view !== state.view) return a.removeAttribute('aria-current');
+    a.setAttribute('aria-current', 'page');
+    a.scrollIntoView({ block: 'nearest', inline: 'nearest' }); // keeps the active section visible in the phone nav bar
+  });
+  if (LIST_STATUS[state.view]) loadDrafts().catch(e => toast(e.message, true));
+}
+const goTo = name => { if (location.hash === `#${name}`) showView(name); else location.hash = name; };
+
 async function loadStats() {
   const { counts = {}, total = 0, weekly, daily, weeklyDrafts } = await api('/stats');
+  const n = { review: counts.pending_approval || 0, ready: counts.approved || 0, scheduled: (counts.queued || 0) + (counts.queuing || 0) };
+  document.querySelectorAll('[data-count]').forEach(b => { b.textContent = n[b.dataset.count] ? String(n[b.dataset.count]) : ''; });
+  const tile = (view, big, label, sub) => el('a', { class: 'tile', href: `#${view}` }, el('b', { text: big }), el('span', { text: label }), sub ? el('small', { text: sub }) : null);
+  $('tiles').replaceChildren(
+    tile('create', daily ? `${daily.remaining}` : '–', 'drafts left today', weeklyDrafts ? `${weeklyDrafts.remaining} left this week` : ''),
+    tile('review', String(n.review), 'waiting for review', n.review ? 'approve or reject' : 'all clear'),
+    tile('ready', String(n.ready), 'approved, ready to send', n.ready ? 'send or auto-schedule' : ''),
+    tile('auto', weekly ? `${weekly.remaining}` : '–', 'post slots left this week', weekly ? `${weekly.used} published · ${weekly.scheduled || 0} ahead` : ''),
+    tile('scheduled', String(n.scheduled), 'scheduled in buffer', ''),
+    tile('archive', String(counts.rejected || 0), 'rejected', `${total} drafts total`));
+  if (daily) $('gen-budget').textContent = `${daily.remaining} of ${daily.cap} drafts left today` + (weeklyDrafts ? ` · ${weeklyDrafts.remaining} of ${weeklyDrafts.cap} this week` : '');
   $('stats').replaceChildren(
     ...Object.entries(STATUS_LABEL).map(([k, label]) => el('span', { class: 'chip', text: label }, el('b', { text: String(counts[k] ?? 0) }))),
     el('span', { class: 'chip', text: 'total' }, el('b', { text: String(total) })),
@@ -81,13 +108,17 @@ async function loadStats() {
   );
 }
 
+// Only the visible list is fetched; the others load when you open them.
 async function loadDrafts() {
-  const box = $('drafts');
+  const view = state.view, status = LIST_STATUS[view]?.();
+  if (status === undefined) return;
+  const box = document.querySelector(`[data-list="${view}"]`);
   box.setAttribute('aria-busy', 'true');
-  const q = state.status ? `?status=${encodeURIComponent(state.status)}` : '';
+  const q = status ? `?status=${encodeURIComponent(status)}` : '';
   try {
     const { drafts = [] } = await api('/drafts' + q);
-    box.replaceChildren(...(drafts.length ? drafts.map(card) : [el('p', { class: 'empty', text: 'nothing here. quiet night.' })]));
+    if (state.view !== view) return;
+    box.replaceChildren(...(drafts.length ? drafts.map(card) : [el('p', { class: 'empty', text: EMPTY[view] })]));
   } finally { box.setAttribute('aria-busy', 'false'); }
 }
 
@@ -202,7 +233,7 @@ async function generate() {
     const { drafts = [], errors = [] } = await api('/draft', { method: 'POST', body: { count: Number($('gen-count').value), ...(pillar ? { pillar } : {}) } });
     toast(`${drafts.length} draft${drafts.length === 1 ? '' : 's'} generated`);
     errors.forEach(e => toast(e, true));
-    if (state.status !== 'pending_approval' && state.status !== '') selectTab('pending_approval');
+    if (drafts.length) goTo('review');
     await refresh();
   } catch (e) { toast(e.message, true); }
   finally { btn.disabled = false; btn.classList.remove('busy'); btn.removeAttribute('aria-busy'); }
@@ -307,7 +338,7 @@ function watchJob(job) {
 }
 
 function selectTab(status) {
-  state.status = status;
+  state.archive = status;
   document.querySelectorAll('.tabs [role=tab]').forEach(t => t.setAttribute('aria-selected', String(t.dataset.status === status)));
 }
 
@@ -330,6 +361,8 @@ document.querySelector('.tabs').addEventListener('click', e => {
   selectTab(t.dataset.status);
   loadDrafts().catch(err => toast(err.message, true));
 });
+window.addEventListener('hashchange', () => showView(location.hash.slice(1)));
+showView(location.hash.slice(1));
 $('reviewer').value = state.reviewer;
 
 fetch('/health').then(r => r.json()).then(h => {
