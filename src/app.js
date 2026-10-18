@@ -87,7 +87,7 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
       let due;
       if (mode === 'schedule') { try { due = checkDueAt(dueAt); } catch (e) { throw badRequest(e.message); } }
       if (!bufferApi.writesEnabled()) throw new HttpError(409, 'Buffer writes are disabled');
-      const d = await store.claimForQueue(checkId(id), reviewer);
+      const d = await store.claimForQueue(checkId(id), reviewer, {plannedAt: due ? Date.parse(due) : Date.now()});
       let post;
       try { post = await bufferApi.createBufferPost(d.text, {mode, dueAt: due}); }
       catch (e) { await store.failQueue(d.id, e.message); throw new HttpError(502, e.message); }
