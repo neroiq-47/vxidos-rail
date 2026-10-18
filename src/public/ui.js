@@ -203,6 +203,48 @@ async function generate() {
   finally { btn.disabled = false; btn.classList.remove('busy'); btn.removeAttribute('aria-busy'); }
 }
 
+// Auto-schedule: pillar list comes from the generate picker so there's one source of truth in the page.
+function setupAuto() {
+  const pillars = [...$('gen-pillar').options].map(o => o.value).filter(Boolean);
+  $('auto-pillars').append(...pillars.map(p => el('label', {}, el('input', { type: 'checkbox', value: p, checked: true }), p)));
+  for (let n = 1; n <= 10; n++) $('auto-count').append(el('option', { value: n, text: String(n), selected: n === 10 }));
+  const pad = n => String(n).padStart(2, '0');
+  const t = new Date(Date.now() + 3600_000); t.setMinutes(0, 0, 0);
+  $('auto-start').value = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}T${pad(t.getHours())}:00`;
+  $('auto-count').addEventListener('change', () => { $('auto-btn').textContent = `auto-schedule ${$('auto-count').value}`; });
+}
+
+let autoArmed = 0;
+async function autoSchedule() {
+  const btn = $('auto-btn');
+  const pillars = [...$('auto-pillars').querySelectorAll('input:checked')].map(i => i.value);
+  if (!pillars.length) return toast('pick at least one pillar', true);
+  const start = new Date($('auto-start').value);
+  if (Number.isNaN(start.getTime())) return toast('pick a start time', true);
+  const count = Number($('auto-count').value);
+  // Two-step confirm: these posts publish on their own.
+  if (Date.now() - autoArmed > 5000) {
+    autoArmed = Date.now();
+    btn.textContent = `confirm: publish ${count} automatically`;
+    setTimeout(() => { if (Date.now() - autoArmed >= 5000) btn.textContent = `auto-schedule ${$('auto-count').value}`; }, 5000);
+    return;
+  }
+  autoArmed = 0;
+  btn.disabled = true; btn.setAttribute('aria-busy', 'true');
+  try {
+    const { scheduled = [], errors = [] } = await api('/schedule-batch', { method: 'POST', body: {
+      reviewer: state.reviewer, count, pillars, startAt: start.toISOString(), intervalMinutes: Number($('auto-every').value) } });
+    if (scheduled.length) {
+      const last = new Date(scheduled[scheduled.length - 1].dueAt).toLocaleString();
+      toast(`${scheduled.length} scheduled in buffer, last at ${last}`);
+    }
+    errors.forEach(e => toast(e, true));
+    selectTab('queued');
+    await refresh();
+  } catch (e) { toast(e.message, true); }
+  finally { btn.disabled = !state.bufferWrites; btn.removeAttribute('aria-busy'); btn.textContent = `auto-schedule ${$('auto-count').value}`; }
+}
+
 function selectTab(status) {
   state.status = status;
   document.querySelectorAll('.tabs [role=tab]').forEach(t => t.setAttribute('aria-selected', String(t.dataset.status === status)));
@@ -220,6 +262,8 @@ $('signin-form').addEventListener('submit', e => {
 });
 $('signout').addEventListener('click', signOut);
 $('gen-btn').addEventListener('click', generate);
+setupAuto();
+$('auto-btn').addEventListener('click', autoSchedule);
 document.querySelector('.tabs').addEventListener('click', e => {
   const t = e.target.closest('[role=tab]');
   if (!t) return;
@@ -230,5 +274,7 @@ $('reviewer').value = state.reviewer;
 
 fetch('/health').then(r => r.json()).then(h => {
   state.bufferWrites = Boolean(h.bufferWrites);
+  $('auto-btn').disabled = !state.bufferWrites;
+  if (!state.bufferWrites) $('auto-hint').textContent = 'buffer writes disabled on server';
   $('foot').textContent = `${String(h.brand || 'vxidos').toLowerCase()} rail ${h.version ? 'v' + h.version : ''} · buffer writes ${state.bufferWrites ? 'on' : 'off'}`;
 }).catch(() => { $('foot').textContent = 'server unreachable'; }).finally(showAuth);
