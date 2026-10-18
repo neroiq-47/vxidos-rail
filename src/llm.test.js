@@ -52,3 +52,12 @@ test('real OpenAI client talks to the fallback base URL with the configured mode
     assert.equal(seen.path, '/v1/chat/completions'); assert.equal(seen.auth, 'Bearer free-key'); assert.equal(seen.body.model, 'tiny');
   } finally { srv.close(); }
 });
+
+test('every free preset has a base URL and default model; groq no longer uses the retired llama-3.3-70b', () => {
+  for (const [name, p] of Object.entries(PRESETS)) {
+    assert.match(p.baseURL, /^https:\/\//, name); assert.ok(p.model, name);
+    assert.equal(providersFromEnv({FALLBACK_LLM_PROVIDER: name, FALLBACK_LLM_API_KEY: 'k'})[0].model, p.model);
+  }
+  assert.deepEqual(Object.keys(PRESETS).sort(), ['cerebras', 'gemini', 'groq', 'openrouter']);
+  assert.notEqual(PRESETS.groq.model, 'llama-3.3-70b-versatile');
+});

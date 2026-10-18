@@ -2,10 +2,13 @@ import OpenAI from 'openai';
 import {HttpError} from './errors.js';
 import {logger} from './log.js';
 
-// Free OpenAI-compatible fallbacks. Model names rotate on free tiers, so FALLBACK_LLM_MODEL overrides the default.
+// Free OpenAI-compatible fallbacks (checked Oct 2026). Free catalogs rotate (Groq retired llama-3.3-70b-versatile
+// on 2026-08-16), so FALLBACK_LLM_MODEL overrides the default.
 export const PRESETS = Object.freeze({
-  groq: {baseURL: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile'},
-  gemini: {baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/', model: 'gemini-3.8-flash'}
+  groq: {baseURL: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b'},           // free: 30 RPM, 1K RPD
+  cerebras: {baseURL: 'https://api.cerebras.ai/v1', model: 'qwen-3.8-27b'},                  // free: ~1M tokens/day
+  openrouter: {baseURL: 'https://openrouter.ai/api/v1', model: 'openrouter/free'},           // free: 20 RPM, 50 RPD; routes to any free model
+  gemini: {baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/', model: 'gemini-3.8-flash'} // free tier prompts may train Google models
 });
 const COOLDOWN_MS = 5 * 60_000;
 
