@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>VXIDOS Rail</title>
+<link rel="stylesheet" href="/ui.css">
+<script type="module" src="/ui.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>vxidos <span class="dim">rail</span></h1>
+      <p class="sig">no face. just vision.</p>
+    </div>
+    <div class="who" id="who" hidden>
+      <span class="mono dim" id="who-name"></span>
+      <button type="button" class="ghost" id="signout">sign out</button>
+    </div>
+  </header>
+
+  <section id="signin" class="panel signin" hidden aria-labelledby="signin-h">
+    <h2 id="signin-h">sign in</h2>
+    <form id="signin-form" novalidate>
+      <label>access token
+        <input type="password" id="token" autocomplete="current-password" required minlength="24">
+      </label>
+      <label>reviewer
+        <input type="text" id="reviewer" autocomplete="username" required pattern="[a-zA-Z0-9_\-]{2,64}" maxlength="64" placeholder="owner">
+      </label>
+      <button type="submit" class="primary">enter</button>
+    </form>
+  </section>
+
+  <main id="app" hidden>
+    <div class="stats" id="stats" aria-label="draft counts"></div>
+
+    <section class="panel gen" aria-label="generate drafts">
+      <label>count
+        <select id="gen-count">
+          <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option>
+        </select>
+      </label>
+      <label>pillar
+        <select id="gen-pillar">
+          <option value="">any</option>
+          <option>midnight lifestyle</option>
+          <option>phantom identity</option>
+          <option>digital-building progress</option>
+        </select>
+      </label>
+      <button type="button" class="primary" id="gen-btn">generate</button>
+    </section>
+
+    <nav class="tabs" role="tablist" aria-label="filter drafts">
+      <button type="button" role="tab" data-status="pending_approval" aria-selected="true">pending</button>
+      <button type="button" role="tab" data-status="approved" aria-selected="false">approved</button>
+      <button type="button" role="tab" data-status="queued" aria-selected="false">queued</button>
+      <button type="button" role="tab" data-status="rejected" aria-selected="false">rejected</button>
+      <button type="button" role="tab" data-status="" aria-selected="false">all</button>
+    </nav>
+
+    <section id="drafts" class="drafts" aria-live="polite" aria-busy="false"></section>
+
+    <details class="panel activity" id="activity">
+      <summary>activity</summary>
+      <ol id="events" class="events"></ol>
+    </details>
+  </main>
+
+  <footer class="foot mono dim" id="foot"></footer>
+</div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>
