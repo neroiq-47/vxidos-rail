@@ -76,7 +76,7 @@ All endpoints except `/`, `/ui.*` and `/health` need `Authorization: Bearer $RAI
 
 | Method | Path | Body / query | Notes |
 |---|---|---|---|
-| GET | `/health` | | `{ok, version, generation, bufferWrites}` |
+| GET | `/health` | | `{ok, version, bufferWrites}` |
 | GET | `/stats` | | counts per status |
 | GET | `/drafts` | `?status=pending_approval\|approved\|rejected\|queuing\|queued` | newest first |
 | GET | `/drafts/:id` | | |
@@ -86,6 +86,8 @@ All endpoints except `/`, `/ui.*` and `/health` need `Authorization: Bearer $RAI
 | POST | `/drafts/:id/queue` | `{reviewer}` | approved only; needs Buffer writes enabled |
 | GET | `/events` | `?limit=50` | audit log, newest first |
 | GET | `/buffer/check`, `/buffer/channels` | | read-only |
+
+`/health` also reports `generation` (whether `OPENAI_API_KEY` is set).
 
 Status codes: `400` invalid input, `401`/`429` auth, `404`, `409` wrong state or duplicate, `413` body too large, `502` upstream (OpenAI/Buffer) failure, `503` missing configuration or storage busy.
 
