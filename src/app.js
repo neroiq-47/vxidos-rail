@@ -6,6 +6,7 @@ import {draftBatch} from './rail.js';
 import * as buffer from './buffer.js';
 import * as store from './store.js';
 import {isId} from './validate.js';
+import {logger} from './log.js';
 
 export const VERSION = '1.0.0';
 const PUBLIC = new URL('./public/', import.meta.url);
@@ -45,7 +46,7 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
   const general = rateLimiter(Number(env.RATE_LIMIT_PER_MIN || 120), 60_000);
   const drafting = rateLimiter(Number(env.DRAFT_LIMIT_PER_HOUR || 30), 3600_000);
   const generating = {busy: false};
-  const trustHops = Math.max(0, Number(env.TRUST_PROXY) || 0);
+  const trust = parseTrustProxy(env.TRUST_PROXY);
 
   const routes = [
     ['GET', /^\/stats$/, async () => [200, await store.stats()]],
@@ -89,13 +90,13 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
       res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
     };
     const url = new URL(req.url || '/', 'http://localhost');
-    const ip = clientIp(req, trustHops);
+    const ip = clientIp(req, trust);
     try {
       if (req.method === 'GET' && STATIC[url.pathname]) {
         const [file, type] = STATIC[url.pathname];
         return send(200, await readFile(new URL(file, PUBLIC)), {'Content-Type': type});
       }
-      if (req.method === 'GET' && url.pathname === '/health') return send(200, {ok: true, brand: 'VXIDOS', version: VERSION, bufferWrites: bufferApi.writesEnabled()});
+      if (req.method === 'GET' && url.pathname === '/health') return send(200, {ok: true, brand: 'VXIDOS', version: VERSION, generation: Boolean(env.OPENAI_API_KEY), bufferWrites: bufferApi.writesEnabled()});
       // Once an IP exhausts its failed attempts it is locked out even with the right token, so guessing can't continue.
       if (authFail.blocked(ip)) return send(429, {error: 'Too many failed attempts'});
       if (!tokenEqual(req.headers.authorization, `Bearer ${secret}`)) { authFail(ip); return send(401, {error: 'Unauthorized'}, {'WWW-Authenticate': 'Bearer'}); }
@@ -107,19 +108,29 @@ export function createApp({secret, generate, bufferApi = buffer, env = process.e
       throw notFound('Not found');
     } catch (e) {
       const status = e.status || 500;
-      if (status >= 500 && status !== 502 && status !== 503) console.error(e);
+      if (status >= 500 && status !== 502 && status !== 503) logger.error('request failed', {method: req.method, path: url.pathname, error: e.message, stack: e.stack});
       return send(status, {error: status === 500 ? 'Internal error' : e.message});
     }
   });
 }
 
-// Behind a reverse proxy (Railway, Fly, nginx) every socket is the proxy. With TRUST_PROXY=N, take the
-// address N hops from the right of X-Forwarded-For: entries further left are client-supplied and spoofable.
-export function clientIp(req, hops = 0) {
+// Behind a reverse proxy (Railway, Fly, nginx) every socket is the proxy, so TRUST_PROXY says where the real
+// client IP is: a header name the proxy sets itself (Railway documents `x-real-ip`), or a hop count N meaning
+// "N entries from the right of X-Forwarded-For" (entries further left are client-supplied and spoofable).
+export function parseTrustProxy(value) {
+  const v = String(value ?? '').trim().toLowerCase();
+  if (!v || v === '0' || v === 'false') return null;
+  if (/^\d+$/.test(v)) return {hops: Number(v)};
+  if (/^[a-z0-9-]+$/.test(v)) return {header: v};
+  throw new Error(`Invalid TRUST_PROXY: ${value}`);
+}
+export function clientIp(req, trust = null) {
   const socketIp = req.socket.remoteAddress || 'unknown';
-  if (!hops) return socketIp;
+  if (typeof trust === 'number') trust = trust ? {hops: trust} : null; // legacy numeric form
+  if (!trust) return socketIp;
+  if (trust.header) return String(req.headers[trust.header] || '').split(',')[0].trim() || socketIp;
   const chain = String(req.headers['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean);
-  return chain[chain.length - hops] || socketIp;
+  return chain[chain.length - trust.hops] || socketIp;
 }
 
 function checkId(id) { if (!isId(id)) throw notFound('Draft not found'); return id; }

@@ -19,7 +19,22 @@ npm run draft -- 3        # or generate 3 drafts from the CLI
 ```
 
 ### Railway
-Set `RAIL_SECRET`, `OPENAI_API_KEY` and `TRUST_PROXY=1` as service variables. Attach a volume at `/data` so drafts survive redeploys, then generate a domain. Without `TRUST_PROXY=1`, every visitor shares the proxy's IP, so a few bad logins would lock everyone out.
+The repo's Dockerfile is used automatically.
+
+| Setting | Value | Why |
+|---|---|---|
+| Variables | `RAIL_SECRET`, `OPENAI_API_KEY` | required (the app exits with a one-line log if `RAIL_SECRET` is missing) |
+| | `TRUST_PROXY=x-real-ip` | Railway's edge sends the client IP in `X-Real-IP`; without this every visitor shares one IP, so a few bad logins lock everyone out |
+| | `RAILWAY_RUN_UID=0` | the image runs as non-root, and Railway volumes need root to write |
+| | `RAIL_DATA_PATH=/data/drafts.json` | store on the volume |
+| Volume | mounted at `/data` | drafts and the audit log survive redeploys |
+| Healthcheck | `/health`, 60s timeout | a deploy that never becomes healthy is marked failed |
+| Replicas | **1** | Railway doesn't allow replicas with a volume, and the JSON store is single-process |
+| Draining | 10s | in-flight requests finish after `SIGTERM` (the app force-exits after 8s) |
+| Wait for CI | on (Settings → Source) | merges to `main` only deploy once GitHub Actions pass |
+| Backups | on (volume → Backups) | the volume is the only copy of your drafts |
+
+Railway logs are parsed as one JSON object per line, with a `level` field. With a volume there's a brief gap on each redeploy, because Railway won't mount the volume in two deployments at once. Railway's Config as Code files (`railway.json` / `railway.toml`) are deprecated and stop being read on 2026-12-01, so this repo doesn't ship one. To keep these settings in code, run `railway config pull` to generate `.railway/railway.ts` (Railway's Infrastructure as Code).
 
 ### Docker
 ```bash
@@ -72,11 +87,13 @@ All endpoints except `/`, `/ui.*` and `/health` need `Authorization: Bearer $RAI
 | GET | `/events` | `?limit=50` | audit log, newest first |
 | GET | `/buffer/check`, `/buffer/channels` | | read-only |
 
+`/health` also reports `generation` (whether `OPENAI_API_KEY` is set).
+
 Status codes: `400` invalid input, `401`/`429` auth, `404`, `409` wrong state or duplicate, `413` body too large, `502` upstream (OpenAI/Buffer) failure, `503` missing configuration or storage busy.
 
 ## Operational limits
 - The JSON store is built for **one process on a persistent disk**. Running several instances needs Postgres or Supabase with unique constraints on `hash` and transactional status updates. The `store.js` API is small enough to swap out.
 - Auth is a single shared token. Anyone holding it can review, and the `reviewer` name is self-declared. For teams, put an SSO proxy in front (e.g. Cloudflare Access) and derive the reviewer from it.
-- Rate limits are in memory and reset when the process restarts. Behind a proxy, set `TRUST_PROXY` to the number of proxy hops; setting it without a proxy lets clients spoof their IP.
+- Rate limits are in memory and reset when the process restarts. Behind a proxy, set `TRUST_PROXY` (`x-real-ip` on Railway, or a hop count for X-Forwarded-For). Setting it without a proxy lets clients spoof their IP.
 - Don't expose the server publicly without TLS and an authenticated proxy.
 - A draft stuck in `queuing` (from a crash mid-push) becomes claimable again after 10 minutes. Check Buffer for a duplicate before retrying.
